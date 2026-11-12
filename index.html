@@ -1167,16 +1167,66 @@ function findBlocks(grid) {
     const cols = []; for (let k = Math.max(labelCol, prevB + 1); k < c; k++) cols.push(k);
     const dateCol = cols.find(k => /datum|date|tag/i.test(cellStr((grid[r] || [])[k])));
     const textCols = cols.filter(k => k !== dateCol);
-    const rows = [];
+    const rows = []; let run = 0;
     for (let rr = r + 1; rr < grid.length && rr < r + 400; rr++) {
       const row = grid[rr] || [];
       if (row.some((v, k) => k <= c && END_RE.test(cellStr(v))) || row.some(v => SEC_RE.test(cellStr(v)))) break;
       const a = parseNum(row[c]); if (!a) continue;
-      rows.push({ a, d: dateCol == null ? "" : row[dateCol], n: textCols.map(k => cellStr(row[k])).filter(Boolean).join(" · ") });
+      const d = dateCol == null ? "" : row[dateCol], n = textCols.map(k => cellStr(row[k])).filter(Boolean).join(" · ");
+      /* Summenzeile: kein Text, kein Datum, Betrag = Summe des Blocks */
+      if (!n && !(d instanceof Date) && !cellStr(d) && rows.length && Math.abs(a - run) < 0.005) break;
+      const parts = n ? findBreakdown(grid, n, a, rr, textCols) : null;
+      if (parts) parts.forEach(p => rows.push({ a: p.a, d, n: p.n, part: n }));
+      else rows.push({ a, d, n });
+      run += a;
     }
     blocks.push({ name: name || "Ohne Namen", type: mk.type, rows });
   }
   return blocks.filter(b => b.rows.length);
+}
+/* Sucht neben dem Block eine Aufschlüsselung: eine Zelle mit demselben Text, darunter Posten mit Betrag rechts daneben.
+   Wird nur übernommen, wenn die Posten genau den Betrag der Zeile ergeben. */
+function findBreakdown(grid, label, amount, rowIdx, textCols) {
+  const want = label.toLowerCase();
+  for (let r2 = 0; r2 < grid.length; r2++) {
+    const row = grid[r2] || [];
+    for (let c2 = 0; c2 < row.length; c2++) {
+      if (cellStr(row[c2]).toLowerCase() !== want || (r2 === rowIdx && textCols.includes(c2))) continue;
+      const items = [];
+      for (let rr = r2 + 1; rr < grid.length && rr < r2 + 60; rr++) {
+        const g = grid[rr] || [], n = cellStr(g[c2]); if (!n) break;
+        const a = [g[c2 + 1], g[c2 + 2]].map(parseNum).find(x => x != null); if (a == null) break;
+        items.push({ n, a });
+      }
+      if (items.length && Math.abs(items.reduce((s, x) => s + x.a, 0) - amount) < 0.005) return items;
+    }
+  }
+  return null;
+}
+/* Gegenprobe: die Werte ganz rechts in den Zeilen Ausgaben, Einnahmen und Differenz unterhalb von FINAL. */
+function finalSums(grid) {
+  const fr = grid.findIndex(row => (row || []).some(v => /^final\b/i.test(cellStr(v)))); if (fr < 0) return null;
+  const pick = re => { for (let r = fr + 1; r < grid.length; r++) { const row = grid[r] || []; if (!row.some(v => re.test(cellStr(v)))) continue;
+    const nums = row.map(v => re.test(cellStr(v)) ? null : parseNum(v)).filter(x => x != null); if (nums.length) return nums[nums.length - 1]; } return null; };
+  const out = { exp: pick(/^ausgaben\s*:?$/i), inc: pick(/^(einnahmen|einkommen)\s*:?$/i), diff: pick(/^differenz\s*:?$/i) };
+  return out.exp == null && out.inc == null ? null : out;
+}
+const CAT_RULES = {
+  exp: [[/geschenk|geburtstag|\bgeb\b/i, "Geschenke"], [/\bfür [A-ZÄÖÜ]/, "Geschenke"], [/tank|park|\bbahn\b|\bbvg\b|\bdb\b|taxi|uber|flixbus|werkstatt|tüv|kfz|maut/i, "Mobilität"],
+    [/steam|game|spiel|kino|konzert|badminton|unisport|fitness|sport|urlaub|reise|hotel|festival|museum/i, "Freizeit"], [/\bobi\b|baumarkt|ikea|waschmaschine|möbel|hornbach|toom|bauhaus|haushalt|staubsauger/i, "Haushalt"],
+    [/friseur|kosmetik|drogerie|\bdm\b|rossmann|müller/i, "Körperpflege"], [/passbild|ausweis|reisepass|bürgeramt|\bamt\b|rundfunk|gebühr|strafzettel|bußgeld/i, "Gebühren & Ämter"],
+    [/amazon|zalando|ebay|\botto\b|temu|shein|aliexpress/i, "Shopping"], [/netflix|spotify|claude|chatgpt|disney|\babo\b|vodafone|telekom|\bo2\b|handyvertrag|icloud|youtube/i, "Abos & Verträge"],
+    [/apotheke|arzt|zahn|brille|physio|kontaktlinse/i, "Gesundheit"], [/kleidung|schuhe|h&m|zara|jacke|hose|primark/i, "Kleidung"],
+    [/rewe|edeka|aldi|lidl|netto|penny|kaufland/i, "Lebensmittel"], [/miete|strom|nebenkosten|internet|gas\b/i, "Wohnen"], [/versicherung|haftpflicht|hausrat/i, "Versicherungen"]],
+  inc: [[/zinsen|dividende|gewinn|trade|ausschüttung|rendite/i, "Kapitalerträge"], [/kleinanzeigen|verkauf|vinted|ebay|rebuy|momox/i, "Verkäufe"],
+    [/tankgeld|\bfür\b|zurück|erstatt|rückzahlung|\bbvg\b|schulden/i, "Erstattungen"], [/gehalt|lohn|minijob/i, "Gehalt"], [/geschenk|geburtstag/i, "Geschenke"]]
+};
+const rowKey = (t, n) => t + "|" + n.toLowerCase().replace(/\s+/g, " ").trim();
+function rowCat(t, n, fallback) {
+  const k = rowKey(t, n);
+  if (I.rowCat[k] !== undefined) return I.rowCat[k];
+  const learned = (S.settings.rules || {})[k]; if (learned) return learned;
+  const hit = CAT_RULES[t].find(([re]) => re.test(n)); return hit ? hit[1] : fallback;
 }
 function guessMonth(name, grid, blocks) {
   const s = name.toLowerCase(); let m = null, y = null, k;
@@ -1202,9 +1252,10 @@ function blockCatDefault(b) {
 function detectMonthSheets() {
   const sheets = I.grids.map(g => ({ name: g.name, grid: g.grid, blocks: findBlocks(g.grid) })).filter(s => s.blocks.length);
   if (!sheets.length) return false;
-  sheets.forEach(s => { s.ym = guessMonth(s.name, s.grid, s.blocks); s.on = true; });
-  I.bsheets = sheets; I.bmap = {};
-  for (const s of sheets) for (const b of s.blocks) { const key = b.type + "|" + b.name; if (!I.bmap[key]) I.bmap[key] = { name: b.name, type: b.type, cat: /erspart|vormonat|übertrag|uebertrag|anfangs/i.test(b.name) ? "" : blockCatDefault(b) }; }
+  sheets.forEach(s => { s.ym = guessMonth(s.name, s.grid, s.blocks); s.on = true; s.check = finalSums(s.grid); });
+  I.bsheets = sheets; I.bmap = {}; I.rowCat = {}; I.replace = false;
+  for (const s of sheets) for (const b of s.blocks) { const key = b.type + "|" + b.name; if (!I.bmap[key]) I.bmap[key] = { name: b.name, type: b.type,
+    cat: /erspart|vormonat|übertrag|uebertrag|anfangs/i.test(b.name) ? "" : blockCatDefault(b), split: /^sonstig/i.test(b.name), fix: b.type === "exp" && /fest|fix/i.test(b.name) }; }
   I.mode = "blocks"; I.target = "tx";
   return true;
 }
@@ -1224,31 +1275,58 @@ function buildBlocks(only) {
       const map = I.bmap[b.type + "|" + b.name]; if (!map || !map.cat) continue;
       let last = null;
       for (const r of b.rows) {
-        let t = b.type; if (t === "exp" ? r.a > 0 : r.a < 0) t = t === "exp" ? "inc" : "exp";
+        let t = b.type; const flip = t === "exp" ? r.a > 0 : r.a < 0; if (flip) t = t === "exp" ? "inc" : "exp";
         const real = blockDate(r.d, s.ym); if (real) last = real;
-        items.push({ d: real || last || s.ym + "-01", t, a: Math.round(Math.abs(r.a) * 100), cat: t === b.type ? map.cat : (t === "inc" ? "Erstattungen" : "Sonstiges"), n: r.n.slice(0, 80) });
+        const n = r.n.slice(0, 80), fallback = t === b.type ? map.cat : (t === "inc" ? "Erstattungen" : "Sonstiges");
+        items.push({ d: real || last || s.ym + "-01", t, a: Math.round(Math.abs(r.a) * 100), n, flip, ym: s.ym, block: b.type + "|" + b.name,
+          split: map.split && !!n, fix: map.fix && !flip, cat: map.split && n ? rowCat(t, n, fallback) : fallback });
       }
     }
   }
   return items;
 }
+function catOptionsFor(t, current, extra) {
+  const cats = S.settings.cats.filter(c => c.type === t).map(c => c.name);
+  const sugg = [...new Set([...(extra || []), ...CAT_RULES[t].map(r => r[1])])].filter(n => n && !cats.some(c => c.toLowerCase() === n.toLowerCase()));
+  return [...cats.map(n => [n, n]), ...sugg.map(n => [n, "Neu: " + n])].map(([v, l]) => `<option value="${esc(v)}"${current === v ? " selected" : ""}>${esc(l)}</option>`).join("");
+}
 function vImportBlocks(pick) {
   const all = buildBlocks(), keys = Object.keys(I.bmap);
-  const sheetRows = I.bsheets.map((s, i) => { const it = buildBlocks(s), inc = it.filter(x => x.t === "inc").reduce((a, x) => a + x.a, 0), exp = it.filter(x => x.t === "exp").reduce((a, x) => a + x.a, 0);
+  const sheetRows = I.bsheets.map((s, i) => {
+    const it = buildBlocks(s), sum = t => it.filter(x => x.t === t).reduce((a, x) => a + x.a, 0), exp = sum("exp"), inc = sum("inc");
+    const flipped = it.filter(x => x.flip).reduce((a, x) => a + x.a, 0), ck = s.check;
+    let check = "";
+    if (ck && s.on) {
+      const okE = ck.exp == null || Math.abs(Math.round(Math.abs(ck.exp) * 100) - (exp - flipped)) <= 1, okI = ck.inc == null || Math.abs(Math.round(Math.abs(ck.inc) * 100) - (inc - flipped)) <= 1;
+      check = `<p class="hint" style="flex-basis:100%">${okE && okI ? '<span class="pill ok">Stimmt mit deiner Tabelle</span>' : '<span class="pill bad">Weicht von deiner Tabelle ab</span>'}
+        Tabelle: Ausgaben ${ck.exp != null ? fmt(Math.round(Math.abs(ck.exp) * 100)) : "–"}, Einnahmen ${ck.inc != null ? fmt(Math.round(Math.abs(ck.inc) * 100)) : "–"}${ck.diff != null ? ", Differenz " + fmt(Math.round(ck.diff * 100)) : ""}.
+        ${flipped ? `Davon ${fmt(flipped)} mit umgekehrtem Vorzeichen, die die App als Erstattung bucht statt sie mit den Ausgaben zu verrechnen.` : ""}${okE && okI ? "" : " Prüfe, ob alle Blöcke einer Kategorie zugeordnet sind."}</p>`;
+    }
     return `<div class="lrow"><label class="check grow"><input type="checkbox" id="imp-s-${i}" data-impsheet="${i}"${s.on ? " checked" : ""}>${esc(s.name)}</label>
       <input class="input" id="imp-ym-${i}" data-impym="${i}" type="month" value="${esc(s.ym)}" aria-label="Monat für ${esc(s.name)}" style="width:170px;text-align:left">
-      <span class="two" style="min-width:150px"><small class="num exp">−${fmt(exp)}</small><small class="num inc">+${fmt(inc)}</small></span></div>`; }).join("");
-  const catSel = (key, i) => { const m = I.bmap[key], cats = S.settings.cats.filter(c => c.type === m.type).map(c => c.name), def = blockCatDefault(m);
-    const names = cats.includes(def) ? cats : [def, ...cats];
-    return `<select class="input" id="imp-b-${i}" data-impblock="${esc(key)}" aria-label="Kategorie für ${esc(m.name)}" style="width:auto;max-width:220px;text-align:left"><option value="">Nicht importieren</option>${names.map(n => `<option value="${esc(n)}"${m.cat === n ? " selected" : ""}>${cats.includes(n) ? esc(n) : "Neu: " + esc(n)}</option>`).join("")}</select>`; };
+      <span class="two" style="min-width:150px"><small class="num exp">−${fmt(exp)}</small><small class="num inc">+${fmt(inc)}</small></span>${check}</div>`; }).join("");
   const blockRows = ["exp", "inc"].map(t => { const ks = keys.filter(k => I.bmap[k].type === t); if (!ks.length) return "";
-    return `<div class="day"><span>${t === "exp" ? "Ausgaben" : "Einkommen"}</span></div>` + ks.map(k => `<div class="lrow"><span class="grow">${esc(I.bmap[k].name)}</span>${catSel(k, keys.indexOf(k))}</div>`).join(""); }).join("");
+    return `<div class="day"><span>${t === "exp" ? "Ausgaben" : "Einkommen"}</span></div>` + ks.map(k => { const m = I.bmap[k], i = keys.indexOf(k);
+      return `<div class="lrow"><span class="grow">${esc(m.name)}</span>
+        <select class="input" id="imp-b-${i}" data-impblock="${esc(k)}" aria-label="Kategorie für ${esc(m.name)}" style="width:auto;max-width:220px;text-align:left"><option value="">Nicht importieren</option>${catOptionsFor(t, m.cat, [blockCatDefault(m)])}</select>
+        ${m.cat ? `<div class="row" style="flex-basis:100%;gap:6px 18px"><label class="check"><input type="checkbox" id="imp-sp-${i}" data-impsplit="${esc(k)}"${m.split ? " checked" : ""}>Jede Zeile einzeln zuordnen</label>
+        ${t === "exp" ? `<label class="check"><input type="checkbox" id="imp-fx-${i}" data-impfix="${esc(k)}"${m.fix ? " checked" : ""}>Als monatliche Fixposten übernehmen</label>` : ""}</div>` : ""}</div>`; }).join(""); }).join("");
+  const splitItems = all.filter(x => x.split), seenKeys = new Set();
+  const splitRows = splitItems.filter(x => { const k = rowKey(x.t, x.n); if (seenKeys.has(k)) return false; seenKeys.add(k); return true; })
+    .map((x, i) => `<div class="lrow"><span class="grow">${esc(x.n)}<br><small class="muted">${shortDate(x.d)} · ${I.bmap[x.block].name}${x.flip ? " · Erstattung" : ""}</small></span><span class="num ${x.t}">${x.t === "inc" ? "+" : "−"}${fmt(x.a)}</span>
+      <select class="input" id="imp-r-${i}" data-improw="${esc(rowKey(x.t, x.n))}" aria-label="Kategorie für ${esc(x.n)}" style="width:auto;max-width:200px;text-align:left">${catOptionsFor(x.t, x.cat, [x.cat])}</select></div>`).join("");
+  const fixItems = all.filter(x => x.fix), latest = fixItems.reduce((m, x) => x.ym > m ? x.ym : m, "");
+  const newFix = fixItems.filter(x => x.ym === latest && !S.settings.rec.some(r => r.name.toLowerCase() === (x.n || "Festkosten").toLowerCase()));
   const missing = I.bsheets.some(s => s.on && !/^\d{4}-\d{2}$/.test(s.ym));
+  const months = [...new Set(I.bsheets.filter(s => s.on && /^\d{4}-\d{2}$/.test(s.ym)).map(s => s.ym))], existing = months.reduce((a, m) => a + txOf(m).length, 0);
   return `<div class="stack">${pick}
     <section class="card"><h2>Monatsblätter<span class="pill ok">Layout erkannt</span></h2>
-      <p class="hint" style="margin-bottom:6px">Prüfe Monat und Jahr je Blatt. Datumsangaben ohne Jahr bekommen das Jahr des Blatts, Zeilen ohne Datum das Datum der Zeile darüber oder den Monatsersten. Vergleiche die Summen rechts mit deiner Tabelle.</p>
-      ${sheetRows}${missing ? '<p class="err">Bei mindestens einem Blatt fehlt der Monat.</p>' : ""}</section>
-    <section class="card"><h2>Kategorien</h2><p class="hint" style="margin-bottom:6px">Jeder Block deiner Tabelle wird einer Kategorie zugeordnet. Positive Beträge unter Ausgaben werden als Erstattung gebucht.</p>${blockRows}</section>
+      <p class="hint" style="margin-bottom:6px">Prüfe Monat und Jahr je Blatt. Datumsangaben ohne Jahr bekommen das Jahr des Blatts, Zeilen ohne Datum das Datum der Zeile darüber oder den Monatsersten.</p>
+      ${sheetRows}${missing ? '<p class="err">Bei mindestens einem Blatt fehlt der Monat.</p>' : ""}
+      ${existing ? `<label class="check" style="margin-top:10px"><input type="checkbox" id="imp-replace"${I.replace ? " checked" : ""}>Vorhandene ${existing} Buchungen in ${months.length === 1 ? esc(monthLabel(months[0])) : "diesen Monaten"} vorher löschen</label>` : ""}</section>
+    <section class="card"><h2>Blöcke</h2><p class="hint" style="margin-bottom:6px">Jeder Block deiner Tabelle wird einer Kategorie zugeordnet, oder Zeile für Zeile. Aufschlüsselungen neben einem Block (wie bei „Sonstiges“) werden einzeln übernommen, wenn ihre Summe genau passt.</p>${blockRows}</section>
+    ${splitRows ? `<section class="card"><h2>Einzeln zuordnen</h2><p class="hint" style="margin-bottom:6px">Vorschläge kommen aus Stichworten. Deine Auswahl merkt sich die App für künftige Importe.</p>${splitRows}</section>` : ""}
+    ${fixItems.length ? `<section class="card"><h2>Fixposten</h2><p class="prose">${newFix.length ? `Aus ${esc(monthLabel(latest))} werden ${newFix.length} Fixposten angelegt, fällig ab ${esc(monthLabel(addMonth(latest, 1)))}: ${newFix.map(x => esc(x.n || "Festkosten") + " " + fmt(x.a)).join(", ")}. Die Buchungen der importierten Monate bleiben normale Buchungen.` : "Alle Fixposten aus diesem Block gibt es schon."}</p></section>` : ""}
     <section class="card"><h2>Vorschau<span class="pill ${all.length ? "ok" : "bad"}">${all.length} Buchungen erkannt</span></h2>
       ${all.length ? `<div class="tblwrap"><table class="prev"><tr><th>Datum</th><th>Art</th><th>Betrag</th><th>Kategorie</th><th>Notiz</th></tr>${all.slice(0, 8).map(it => `<tr><td>${shortDate(it.d)}</td><td>${it.t === "inc" ? "Einnahme" : "Ausgabe"}</td><td class="num">${fmt(it.a)}</td><td>${esc(it.cat)}</td><td>${esc(it.n)}</td></tr>`).join("")}</table></div>
         <div class="row" style="margin-top:14px"><button class="btn primary" data-act="impRun">${all.length} Buchungen importieren</button><button class="btn ghost" data-act="impTable">Spalten stattdessen selbst zuordnen</button></div>`
@@ -1427,9 +1505,12 @@ const A = {
   async impRun(el) {
     const items = buildImport(); if (!items.length) return;
     busy(el, true, "Importiere …");
-    const batch = rid(6); let n = 0, dup = 0;
+    const batch = rid(6); let n = 0, dup = 0, extra = "";
     if (I.target === "tx") {
-      const seen = new Set(Object.values(S.months).flat().map(t => [t.d, t.t, t.a, t.n || ""].join("|"))), add = {}; let cats = false;
+      let cats = false, recN = 0;
+      const blocksMode = I.mode === "blocks", touched = new Set();
+      if (blocksMode && I.replace) for (const s of I.bsheets) if (s.on && /^\d{4}-\d{2}$/.test(s.ym) && txOf(s.ym).length) { put(s.ym, []); touched.add(s.ym); }
+      const seen = new Set(Object.values(S.months).flat().map(t => [t.d, t.t, t.a, t.n || ""].join("|"))), add = {};
       for (const it of items) {
         if (seen.has([it.d, it.t, it.a, it.n.slice(0, 80)].join("|"))) { dup++; continue; }
         let c = S.settings.cats.find(c => c.type === it.t && c.name.toLowerCase() === it.cat.toLowerCase());
@@ -1437,9 +1518,20 @@ const A = {
         if (!c) c = S.settings.cats.find(c => c.type === it.t && /^Sonstige/.test(c.name)) || { id: "" };
         const m = it.d.slice(0, 7); (add[m] = add[m] || []).push({ id: rid(), t: it.t, a: it.a, c: c.id, d: it.d, n: it.n.slice(0, 80), imp: batch }); n++;
       }
-      for (const m of Object.keys(add)) put(m, [...txOf(m), ...add[m]]);
+      for (const m of Object.keys(add)) { put(m, [...txOf(m), ...add[m]]); touched.add(m); }
+      if (blocksMode) {
+        const rules = S.settings.rules = S.settings.rules || {};
+        for (const it of items) if (it.split && I.rowCat[rowKey(it.t, it.n)] !== undefined) { rules[rowKey(it.t, it.n)] = it.cat; cats = true; }
+        const fx = items.filter(x => x.fix), latest = fx.reduce((m, x) => x.ym > m ? x.ym : m, "");
+        for (const x of fx.filter(x => x.ym === latest)) {
+          const name = (x.n || "Festkosten").slice(0, 60); if (S.settings.rec.some(r => r.name.toLowerCase() === name.toLowerCase())) continue;
+          const c = S.settings.cats.find(c => c.type === "exp" && c.name.toLowerCase() === x.cat.toLowerCase());
+          S.settings.rec.push({ id: rid(), name, a: x.a, t: "exp", c: c ? c.id : "", day: Math.min(28, Number(x.d.slice(8)) || 1), from: addMonth(latest, 1) }); recN++; cats = true;
+        }
+      }
       if (cats) await saveSettings();
-      for (const m of Object.keys(add)) await saveMonth(m);
+      for (const m of touched) await saveMonth(m);
+      if (recN) extra = `, ${recN} Fixposten angelegt`;
       const ms = Object.keys(add).sort(); if (ms.length) S.month = ms[ms.length - 1];
     } else if (I.target === "trade") {
       const seen = new Set(S.inv.trades.map(t => [t.d, t.side, asset(t.as).name.toLowerCase(), t.q, t.amt].join("|")));
@@ -1465,7 +1557,7 @@ const A = {
     S.lastImp = I.target === "snap" || !n ? null : { target: I.target, batch };
     const target = I.target; Object.assign(I, { rows: null, wb: null, sheets: null, grids: null, bsheets: null, mode: "table" });
     S.view = n ? ({ tx: "tx", trade: "invest", snap: "wealth" })[target] : "import"; renderView();
-    toast(n ? `${n} ${n === 1 ? "Zeile" : "Zeilen"} importiert${dup ? ", " + dup + " Dubletten übersprungen" : ""}.` : "Alle Zeilen waren schon vorhanden.");
+    toast(n ? `${n} ${n === 1 ? "Zeile" : "Zeilen"} importiert${dup ? ", " + dup + " Dubletten übersprungen" : ""}${extra}.` : "Alle Zeilen waren schon vorhanden" + extra + ".");
   },
   impTable() { I.mode = "table"; I.wb ? useSheet(I.sheets[0]) : setRows(I.grids[0].grid); renderView(); },
   async impUndo() {
@@ -1658,6 +1750,10 @@ document.addEventListener("change", async e => {
   else if (el.dataset.impsheet) { I.bsheets[+el.dataset.impsheet].on = el.checked; renderView(); }
   else if (el.dataset.impym) { I.bsheets[+el.dataset.impym].ym = el.value; renderView(); }
   else if (el.dataset.impblock != null && I.bmap[el.dataset.impblock]) { I.bmap[el.dataset.impblock].cat = el.value; renderView(); }
+  else if (el.dataset.impsplit != null && I.bmap[el.dataset.impsplit]) { I.bmap[el.dataset.impsplit].split = el.checked; renderView(); }
+  else if (el.dataset.impfix != null && I.bmap[el.dataset.impfix]) { I.bmap[el.dataset.impfix].fix = el.checked; renderView(); }
+  else if (el.dataset.improw != null) { I.rowCat[el.dataset.improw] = el.value; renderView(); }
+  else if (el.id === "imp-replace") { I.replace = el.checked; renderView(); }
   else if (el.id === "imp-target") { I.target = el.value; guessMap(); renderView(); }
   else if (el.id === "imp-sheet") { useSheet(el.value); renderView(); }
   else if (el.id === "imp-sign") { I.sign = el.value; renderView(); }
