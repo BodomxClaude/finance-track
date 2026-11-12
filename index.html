@@ -189,6 +189,22 @@ table.prev th{color:var(--muted);font-weight:600}
 .chart .cost{fill:none;stroke:var(--muted);stroke-width:1.5;stroke-dasharray:5 4}
 .chart .pt{fill:var(--surface);stroke:var(--accent);stroke-width:2}
 .chips{display:flex;flex-wrap:wrap;gap:8px 16px}
+/* Anklickbare Werte in der Übersicht führen zu den passenden Buchungen */
+.catbtn{display:flex;flex-direction:column;gap:6px;width:100%;padding:8px;margin:-8px;margin-inline:-8px;border:0;border-radius:10px;background:none;text-align:left;color:inherit;font:inherit}
+.catbtn:hover{background:var(--sunken)}
+.catbtn .bar{display:block}
+.cat.catbtn+.cat.catbtn{margin-top:6px}
+.kvwrap{display:flex;flex-direction:column;gap:8px}
+.kvbtn{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:baseline;padding:4px 8px;margin:-4px -8px;border:0;border-radius:8px;background:none;text-align:left;color:inherit;font:inherit}
+.kvbtn:hover{background:var(--sunken)}
+.kvbtn>span:first-child{color:var(--muted)}
+.tbars button{display:block;width:min(18px,36%);min-height:2px;border:0;padding:0;border-radius:4px 4px 0 0;cursor:pointer}
+.tbars button:hover{opacity:.75}
+.tcol .mbtn{border:0;background:none;color:inherit;font:inherit;padding:2px 6px;border-radius:6px}
+.tcol .mbtn:hover{background:var(--sunken)}
+.fchip{display:inline-flex;align-items:center;gap:6px;padding:4px 6px 4px 12px;border-radius:99px;border:1px solid var(--line);background:var(--accent-soft);color:var(--ink);font-size:13px;font-weight:600}
+.fchip svg{width:16px;height:16px}
+.fsum{display:flex;justify-content:space-between;gap:12px;padding:14px 4px 0;font-size:13.5px;color:var(--muted)}
 
 @media (max-width:860px){
   .app{grid-template-columns:minmax(0,1fr);gap:0}
@@ -759,15 +775,15 @@ function vOverview() {
   const catHtml = rows.length ? rows.map(({ c, a }) => {
     const over = c.budget > 0 && a > c.budget, w = Math.min(100, c.budget > 0 ? a / c.budget * 100 : a / maxA * 100);
     const sub = c.budget > 0 ? (over ? `${fmt(a - c.budget)} über dem Budget von ${EUR0.format(c.budget / 100)}` : `${Math.round(a / c.budget * 100)} % von ${EUR0.format(c.budget / 100)} Budget`) : `${exp ? Math.round(a / exp * 100) : 0} % der Ausgaben`;
-    return `<div class="cat"><div class="line1"><span class="dot" style="background:${safeColor(c.color)}"></span><span class="grow">${esc(c.name)}</span>${over ? '<span class="pill bad">Über Budget</span>' : ""}<span class="num">${fmt(a)}</span></div>
-      <div class="bar"><i style="width:${w.toFixed(1)}%;background:${over ? "var(--exp)" : safeColor(c.color)}"></i></div><small>${sub}</small></div>`;
+    return `<button class="cat catbtn" data-act="filterTx" data-type="exp" data-cat="${esc(c.id || "__none")}" aria-label="Buchungen in ${esc(c.name)} anzeigen"><span class="line1"><span class="dot" style="background:${safeColor(c.color)}"></span><span class="grow">${esc(c.name)}</span>${over ? '<span class="pill bad">Über Budget</span>' : ""}<span class="num">${fmt(a)}</span></span>
+      <span class="bar"><i style="width:${w.toFixed(1)}%;background:${over ? "var(--exp)" : safeColor(c.color)}"></i></span><small>${sub}</small></button>`;
   }).join("") : `<p class="muted">Keine Ausgaben in diesem Monat.</p>`;
   const recent = [...tx].sort((a, b) => b.d.localeCompare(a.d)).slice(0, 5).map(txRow).join("");
   return `<div class="stack">${notices}
     <section class="card"><div class="hero">
       <div><span class="eyebrow">Saldo ${esc(monthLabel(m))}</span><div class="saldo ${bal < 0 ? "exp" : ""}">${bal < 0 ? "−" : ""}${fmt(Math.abs(bal))}</div></div>
-      <dl class="kv"><dt>Einnahmen</dt><dd class="num inc">+${fmt(inc)}</dd><dt>Ausgaben</dt><dd class="num exp">−${fmt(exp)}</dd>
-        <dt>Sparquote</dt><dd class="num">${rate}</dd>${budTotal ? `<dt>Budget verbraucht</dt><dd class="num">${Math.round(exp / budTotal * 100)} %</dd>` : ""}</dl>
+      <div class="kvwrap"><button class="kvbtn" data-act="filterTx" data-type="inc"><span>Einnahmen</span><span class="num inc">+${fmt(inc)}</span></button><button class="kvbtn" data-act="filterTx" data-type="exp"><span>Ausgaben</span><span class="num exp">−${fmt(exp)}</span></button>
+        <dl class="kv"><dt>Sparquote</dt><dd class="num">${rate}</dd>${budTotal ? `<dt>Budget verbraucht</dt><dd class="num">${Math.round(exp / budTotal * 100)} %</dd>` : ""}</dl></div>
     </div></section>
     <div class="grid2">
       <section class="card"><h2>Ausgaben nach Kategorie</h2>${catHtml}</section>
@@ -780,17 +796,21 @@ function trendCard() {
   const max = Math.max(1, ...data.flatMap(d => [d.inc, d.exp]));
   return `<section class="card"><h2>Verlauf, 6 Monate</h2>
     <div class="trend">${data.map(d => `<div class="tcol${d.m === S.month ? " cur" : ""}" title="${esc(monthLabel(d.m))}: Einnahmen ${fmt(d.inc)}, Ausgaben ${fmt(d.exp)}">
-      <div class="tbars"><i class="bi" style="height:${(d.inc / max * 100).toFixed(1)}%"></i><i class="be" style="height:${(d.exp / max * 100).toFixed(1)}%"></i></div><span>${esc(monthShort(d.m))}</span></div>`).join("")}</div>
+      <div class="tbars"><button class="bi" data-act="filterTx" data-type="inc" data-m="${d.m}" style="height:${(d.inc / max * 100).toFixed(1)}%" aria-label="Einnahmen ${esc(monthLabel(d.m))}: ${fmt(d.inc)}"></button><button class="be" data-act="filterTx" data-type="exp" data-m="${d.m}" style="height:${(d.exp / max * 100).toFixed(1)}%" aria-label="Ausgaben ${esc(monthLabel(d.m))}: ${fmt(d.exp)}"></button></div><button class="mbtn" data-act="filterTx" data-type="all" data-m="${d.m}">${esc(monthShort(d.m))}</button></div>`).join("")}</div>
     <div class="legend" style="margin-top:12px"><span><i style="background:var(--inc)"></i>Einnahmen</span><span><i style="background:var(--exp)"></i>Ausgaben</span><span>Höchster Wert: ${EUR0.format(max / 100)}</span></div></section>`;
 }
 
 /* ---------- Buchungen ---------- */
 function txListHtml() {
   const q = S.filter.q.trim().toLowerCase();
-  const list = txOf(S.month).filter(t => (S.filter.type === "all" || t.t === S.filter.type) && (!q || (t.n || "").toLowerCase().includes(q) || cat(t.c).name.toLowerCase().includes(q)))
+  const fc = S.filter.cat, inCat = t => !fc || (fc === "__none" ? !S.settings.cats.some(c => c.id === t.c) : t.c === fc);
+  const list = txOf(S.month).filter(t => (S.filter.type === "all" || t.t === S.filter.type) && inCat(t) && (!q || (t.n || "").toLowerCase().includes(q) || cat(t.c).name.toLowerCase().includes(q)))
     .sort((a, b) => b.d.localeCompare(a.d));
+  const filtered = fc || q || S.filter.type !== "all";
+  const total = list.reduce((a, t) => a + (t.t === "inc" ? t.a : -t.a), 0);
+  const head = filtered && list.length ? `<div class="fsum"><span>${list.length} ${list.length === 1 ? "Buchung" : "Buchungen"}</span><span class="num">${total < 0 ? "−" : "+"}${fmt(Math.abs(total))}</span></div>` : "";
   if (!list.length) return `<div class="empty"><p>${txOf(S.month).length ? "Keine Buchung passt zu diesem Filter." : "Noch keine Buchungen im " + esc(monthLabel(S.month)) + "."}</p><button class="btn primary" data-act="newTx">${ic("plus")}Neue Buchung</button></div>`;
-  let out = "", day = "";
+  let out = head, day = "";
   for (const t of list) {
     if (t.d !== day) { day = t.d; const s = list.filter(x => x.d === day).reduce((a, x) => a + (x.t === "inc" ? x.a : -x.a), 0);
       out += `<div class="day"><span>${esc(dayLabel(day))}</span><span class="num">${s < 0 ? "−" : "+"}${fmt(Math.abs(s))}</span></div>`; }
@@ -801,6 +821,7 @@ function txListHtml() {
 function vTx() {
   const seg = [["all", "Alle"], ["exp", "Ausgaben"], ["inc", "Einnahmen"]].map(([v, l]) => `<button data-act="ftype" data-type="${v}" aria-pressed="${S.filter.type === v}">${l}</button>`).join("");
   return `<section class="card"><div class="tools"><input class="input" id="tx-q" type="search" placeholder="Suchen nach Notiz oder Kategorie" value="${esc(S.filter.q)}" aria-label="Buchungen durchsuchen"><div class="seg">${seg}</div></div>
+    ${S.filter.cat ? `<div class="row" style="margin-top:12px"><button class="fchip" data-act="clearCat" aria-label="Kategorie-Filter entfernen">Kategorie: ${esc(S.filter.cat === "__none" ? "Ohne Kategorie" : cat(S.filter.cat).name)}${ic("x")}</button></div>` : ""}
     <div id="txlist">${txListHtml()}</div></section>`;
 }
 function findTx(id) { for (const m of Object.keys(S.months)) { const t = S.months[m].find(x => x.id === id); if (t) return { t, m }; } return null; }
@@ -1003,10 +1024,15 @@ function pricesDialog() {
 }
 
 /* ---------- Vermögen ---------- */
-const ACC_KIND = { cash: "Konto", depot: "Depot", debt: "Schulden", other: "Sachwert" };
+const ACC_KIND = { cash: "Konto", depot: "Depot", debt: "Schulden", other: "Sachwert", total: "Gesamtwert" };
+/* Ein Konto der Art „total“ hält das ganze Vermögen eines Monats (z. B. aus einer älteren Übersicht).
+   Ist es in einem Monat gesetzt, gilt nur dieser Wert, damit nichts doppelt zählt. */
 function snapTotal(m) {
   const s = S.inv.snaps[m] || {}; let cash = 0, depot = 0, debt = 0;
+  const whole = S.inv.accounts.find(a => a.kind === "total" && s[a.id] != null);
+  if (whole) return { cash: 0, depot: 0, debt: 0, total: s[whole.id], whole: true };
   for (const a of S.inv.accounts) {
+    if (a.kind === "total") continue;
     let v = s[a.id];
     if (a.kind === "depot") { if (v == null) v = sumOf(positions(m + "-31"), "cost"); depot += v; }
     else if (v != null) a.kind === "debt" ? debt += v : cash += v;
@@ -1015,8 +1041,10 @@ function snapTotal(m) {
 }
 function nowTotal() {
   const months = Object.keys(S.inv.snaps).sort(), last = id => { for (let i = months.length - 1; i >= 0; i--) { const v = S.inv.snaps[months[i]][id]; if (v != null) return v; } return 0; };
+  const lm = months[months.length - 1];
+  if (lm && snapTotal(lm).whole) return { cash: 0, debt: 0, long: 0, trade: 0, total: snapTotal(lm).total, whole: lm };
   let cash = 0, debt = 0, long = 0, trade = 0;
-  for (const a of S.inv.accounts) { if (a.kind === "depot") { if (!S.inv.trades.length) long += last(a.id); } else a.kind === "debt" ? debt += last(a.id) : cash += last(a.id); }
+  for (const a of S.inv.accounts) { if (a.kind === "total") continue; if (a.kind === "depot") { if (!S.inv.trades.length) long += last(a.id); } else a.kind === "debt" ? debt += last(a.id) : cash += last(a.id); }
   for (const p of positions()) p.a.strat === "trade" ? trade += p.value : long += p.value;
   return { cash, debt, long, trade, total: cash + long + trade - debt };
 }
@@ -1046,16 +1074,17 @@ function vWealth() {
     <p>Erfasse einmal im Monat die Stände deiner Konten. Zusammen mit deinem Depot entsteht daraus der Verlauf deines Vermögensaufbaus.</p>
     <div class="row" style="justify-content:center"><button class="btn primary" data-act="newSnap">${ic("plus")}Ersten Stand erfassen</button><button class="btn" data-act="go" data-view="import">Aus Tabelle importieren</button></div></div>${accCard}</div>`;
   const pts = months.map(m => ({ m, v: snapTotal(m).total, c: sumOf(positions(m + "-31"), "cost") }));
-  if (!inv.snaps[cur] && (!months.length || cur > months[months.length - 1])) pts.push({ m: cur, v: now.total, c: sumOf(positions(), "cost"), today: true });
+  if (!now.whole && !inv.snaps[cur] && (!months.length || cur > months[months.length - 1])) pts.push({ m: cur, v: now.total, c: sumOf(positions(), "cost"), today: true });
   const prev = pts.length > 1 ? pts[pts.length - 2] : null, lastPt = pts[pts.length - 1], delta = prev ? lastPt.v - prev.v : 0;
   const first = pts[0], showCost = inv.trades.length > 0;
   const rows = [...months].reverse().map((m, i, arr) => { const s = snapTotal(m), p = arr[i + 1] ? snapTotal(arr[i + 1]).total : null, d = p == null ? null : s.total - p;
-    return `<button class="tx" data-act="editSnap" data-m="${m}"><span class="grow"><b>${esc(monthLabel(m))}</b><small>Konten ${fmt(s.cash)} · Depot ${fmt(s.depot)}${s.debt ? " · Schulden " + fmt(s.debt) : ""}</small></span><span class="two"><span class="num">${fmt(s.total)}</span>${d == null ? "" : `<small class="num ${d < 0 ? "exp" : "inc"}">${signed(d)}</small>`}</span></button>`; }).join("");
+    return `<button class="tx" data-act="editSnap" data-m="${m}"><span class="grow"><b>${esc(monthLabel(m))}</b><small>${s.whole ? "Gesamtvermögen aus deiner Übersicht" : `Konten ${fmt(s.cash)} · Depot ${fmt(s.depot)}${s.debt ? " · Schulden " + fmt(s.debt) : ""}`}</small></span><span class="two"><span class="num">${fmt(s.total)}</span>${d == null ? "" : `<small class="num ${d < 0 ? "exp" : "inc"}">${signed(d)}</small>`}</span></button>`; }).join("");
   return `<div class="stack">
     <section class="card"><div class="hero">
       <div><span class="eyebrow">Gesamtvermögen heute</span><div class="saldo ${now.total < 0 ? "exp" : ""}">${now.total < 0 ? "−" : ""}${fmt(Math.abs(now.total))}</div>
         <div class="row" style="margin-top:14px"><button class="btn primary" data-act="newSnap">${ic("plus")}Stand erfassen</button>${prev ? `<span class="pill ${delta < 0 ? "bad" : "ok"}">${signed(delta)} seit ${esc(monthLabel(prev.m))}</span>` : ""}</div></div>
-      <dl class="kv"><dt>Konten und Sachwerte</dt><dd class="num">${fmt(now.cash)}</dd><dt>Depot langfristig</dt><dd class="num">${fmt(now.long)}</dd><dt>Depot Trading</dt><dd class="num">${fmt(now.trade)}</dd>${now.debt ? `<dt>Schulden</dt><dd class="num exp">−${fmt(now.debt)}</dd>` : ""}</dl>
+      ${now.whole ? `<p class="prose">Stand aus deiner Gesamtübersicht für ${esc(monthLabel(now.whole))}. Sobald du einen Monat mit Einzelkonten erfasst, zeigt die App hier die Aufteilung.</p>`
+        : `<dl class="kv"><dt>Konten und Sachwerte</dt><dd class="num">${fmt(now.cash)}</dd><dt>Depot langfristig</dt><dd class="num">${fmt(now.long)}</dd><dt>Depot Trading</dt><dd class="num">${fmt(now.trade)}</dd>${now.debt ? `<dt>Schulden</dt><dd class="num exp">−${fmt(now.debt)}</dd>` : ""}</dl>`}
     </div></section>
     <section class="card"><h2>Vermögensverlauf${pts.length > 1 ? `<span class="pill ${lastPt.v - first.v < 0 ? "bad" : "ok"}">${signed(lastPt.v - first.v)} seit ${esc(monthLabel(first.m))}</span>` : ""}</h2>
       ${wealthChart(pts, showCost)}
@@ -1069,7 +1098,7 @@ function snapDialog(m) {
   const depotNow = inv.trades.length && m === curMonth() ? sumOf(positions(), "value") : null;
   openModal(`<form class="sheet" data-form="snap" data-m="${isNew ? "" : m}" autocomplete="off"><h2>${isNew ? "Stand erfassen" : "Stand " + esc(monthLabel(m))}</h2>
     <label class="field"><span>Monat</span><input class="input" id="sn-month" type="month" value="${m}" pattern="\\d{4}-\\d{2}" placeholder="JJJJ-MM" required${isNew ? "" : " readonly"}></label>
-    ${inv.accounts.map(a => { const v = ex ? ex[a.id] : (a.kind === "depot" ? depotNow : prev[a.id]); return `<div class="lrow"><span class="grow">${esc(a.name)}<br><small class="muted">${ACC_KIND[a.kind]}${a.kind === "depot" && inv.trades.length ? ", leer lassen für Einstandswert" : ""}</small></span><input class="input num" id="sn-${esc(a.id)}" data-acc="${esc(a.id)}" inputmode="decimal" placeholder="Stand €" value="${v != null ? fmtIn(v) : ""}" aria-label="Stand ${esc(a.name)}"></div>`; }).join("")}
+    ${inv.accounts.map(a => { const v = ex ? ex[a.id] : (a.kind === "depot" ? depotNow : a.kind === "total" ? null : prev[a.id]); return `<div class="lrow"><span class="grow">${esc(a.name)}<br><small class="muted">${ACC_KIND[a.kind]}${a.kind === "depot" && inv.trades.length ? ", leer lassen für Einstandswert" : ""}${a.kind === "total" ? ", nur ausfüllen ohne Einzelkonten" : ""}</small></span><input class="input num" id="sn-${esc(a.id)}" data-acc="${esc(a.id)}" inputmode="decimal" placeholder="Stand €" value="${v != null ? fmtIn(v) : ""}" aria-label="Stand ${esc(a.name)}"></div>`; }).join("")}
     <p class="hint">Trage die Kontostände zum Monatsende ein. Schulden als positive Zahl.</p><p class="err" id="tr-err"></p>
     <div class="row" style="justify-content:space-between">${isNew ? "<span></span>" : '<button type="button" class="btn danger" data-act="delSnap">Löschen</button>'}
       <div class="row"><button type="button" class="btn ghost" data-act="close">Abbrechen</button><button class="btn primary">Speichern</button></div></div></form>`);
@@ -1134,7 +1163,7 @@ async function loadImportFile(file) {
       I.grids = I.sheets.map(n => ({ name: n, grid: XLSX.utils.sheet_to_json(I.wb.Sheets[n], { header: 1, raw: true, defval: "" }) }));
     } else { I.wb = null; I.sheets = null; I.grids = [{ name: file.name.replace(/\.[^.]+$/, ""), grid: parseCsv(await file.text()) }]; }
     I.name = file.name;
-    if (!detectMonthSheets()) I.wb ? useSheet(I.sheets[0]) : setRows(I.grids[0].grid);
+    if (!detectMonthSheets() && !detectWealth()) I.wb ? useSheet(I.sheets[0]) : setRows(I.grids[0].grid);
   } catch (e) { I.rows = null; I.mode = "table"; toast("Die Datei konnte nicht gelesen werden."); }
   renderView();
 }
@@ -1260,6 +1289,44 @@ function detectMonthSheets() {
   I.mode = "blocks"; I.target = "tx";
   return true;
 }
+/* ---------- Import: Vermögensübersicht (Spalten „Date“ und „Total“, Monate wie 01.23) ---------- */
+function parseMonth(v) {
+  if (v instanceof Date) { if (isNaN(v)) return null; const u = new Date(v.getTime() + 12 * 3600e3); return u.getUTCFullYear() + "-" + pad(u.getUTCMonth() + 1); }
+  if (typeof v === "number") { if (v < 1 || v >= 13) return null; const m = Math.floor(v), y = Math.round((v - m) * 100); return y >= 0 && y <= 99 ? (2000 + y) + "-" + pad(m) : null; }
+  const s = cellStr(v).toLowerCase(); let k;
+  const ym = (y, m) => m >= 1 && m <= 12 ? (y < 100 ? 2000 + y : y) + "-" + pad(m) : null;
+  if ((k = s.match(/^(\d{1,2})[.\/-](\d{2}|\d{4})$/))) return ym(+k[2], +k[1]);
+  if ((k = s.match(/^(\d{4})[-.\/](\d{1,2})$/))) return ym(+k[1], +k[2]);
+  if ((k = s.match(/^([a-zäöü]+)\.?\s*['’]?(\d{2}|\d{4})$/)) && MONTH_WORDS[k[1]]) return ym(+k[2], MONTH_WORDS[k[1]]);
+  const d = parseDate(v); return d ? d.slice(0, 7) : null;
+}
+function detectWealth() {
+  const out = new Map(), HEAD = /^(date|datum|monat|month|zeitpunkt|stand)$/i, TOTAL = /^(total|gesamt|gesamtvermögen|vermögen|summe|netto|nettovermögen)$/i;
+  for (const { grid } of I.grids) {
+    grid.forEach((row, r) => (row || []).forEach((v, c) => {
+      if (!HEAD.test(cellStr(v))) return;
+      const tc = [c + 1, c + 2, c + 3].find(k => cellStr(row[k])); if (tc == null || !TOTAL.test(cellStr(row[tc]))) return;
+      for (let rr = r + 1; rr < grid.length && rr < r + 400; rr++) {
+        const g = grid[rr] || []; if (HEAD.test(cellStr(g[c]))) continue;
+        const m = parseMonth(g[c]), val = parseNum(g[tc]);
+        if (m && val != null) out.set(m, val);
+      }
+    }));
+  }
+  if (!out.size) return false;
+  I.wealth = [...out].sort((a, b) => a[0].localeCompare(b[0])).map(([m, v]) => ({ m, v }));
+  I.mode = "wealth"; I.target = "wealth";
+  return true;
+}
+function vImportWealth(pick) {
+  const w = I.wealth, first = w[0], last = w[w.length - 1], clash = w.filter(x => S.inv.snaps[x.m]).length;
+  const show = w.length > 12 ? [...w.slice(0, 6), null, ...w.slice(-6)] : w;
+  return `<div class="stack">${pick}
+    <section class="card"><h2>Vermögensübersicht<span class="pill ok">${w.length} Monate erkannt</span></h2>
+      <p class="prose">Von ${esc(monthLabel(first.m))} bis ${esc(monthLabel(last.m))}. Die Werte werden als Monatsstände auf dem Konto „Gesamtvermögen“ gespeichert und bilden den Verlauf im Tab Vermögen. Monate ohne Betrag werden übersprungen.${clash ? ` Für ${clash} ${clash === 1 ? "Monat gibt" : "Monate gibt"} es schon einen Stand; dort gilt danach der Wert aus der Übersicht.` : ""}</p>
+      <div class="tblwrap" style="margin-top:12px"><table class="prev"><tr><th>Monat</th><th style="text-align:right">Gesamtvermögen</th></tr>${show.map(x => x ? `<tr><td>${esc(monthLabel(x.m))}</td><td class="num" style="text-align:right">${fmt(Math.round(x.v * 100))}</td></tr>` : `<tr><td colspan="2" class="muted">…</td></tr>`).join("")}</table></div>
+      <div class="row" style="margin-top:14px"><button class="btn primary" data-act="impRun">${w.length} Monatsstände importieren</button></div></section></div>`;
+}
 function blockDate(raw, ym) {
   if (raw instanceof Date) return parseDate(raw);
   const s = cellStr(raw); if (!s) return null;
@@ -1342,6 +1409,7 @@ function vImportBlocks(pick) {
 }
 function buildImport() {
   if (I.mode === "blocks") return buildBlocks();
+  if (I.mode === "wealth") return I.wealth || [];
   const M = I.map, cell = (r, k) => M[k] == null ? "" : r[M[k]], str = (r, k) => String(cell(r, k) ?? "").trim(), items = [];
   for (const r of I.rows) {
     const d = parseDate(cell(r, "date")); if (!d) continue;
@@ -1366,11 +1434,12 @@ function buildImport() {
 function vImport() {
   const pick = `<section class="card"><h2>Tabelle aus Google Sheets übernehmen</h2>
     <p class="prose">Öffne deine Tabelle in Google Sheets und wähle Datei, Herunterladen, dann Microsoft Excel (.xlsx) oder CSV. Lade die Datei hier hoch. Sie wird nur in deinem Browser gelesen und danach verschlüsselt gespeichert.</p>
-    <div class="row" style="margin-top:14px"><label class="btn primary" style="cursor:pointer">${ic("upload")}Datei wählen<input type="file" id="imp-file" accept=".csv,.txt,.tsv,.xlsx,.xls,.ods" hidden></label>${I.mode === "blocks" ? `<span class="muted">${esc(I.name)} · ${I.bsheets.length} ${I.bsheets.length === 1 ? "Monatsblatt" : "Monatsblätter"}</span>` : I.rows ? `<span class="muted">${esc(I.name)} · ${I.rows.length} Zeilen</span>` : ""}
+    <div class="row" style="margin-top:14px"><label class="btn primary" style="cursor:pointer">${ic("upload")}Datei wählen<input type="file" id="imp-file" accept=".csv,.txt,.tsv,.xlsx,.xls,.ods" hidden></label>${I.mode === "blocks" ? `<span class="muted">${esc(I.name)} · ${I.bsheets.length} ${I.bsheets.length === 1 ? "Monatsblatt" : "Monatsblätter"}</span>` : I.mode === "wealth" && I.wealth ? `<span class="muted">${esc(I.name)} · Vermögensübersicht</span>` : I.rows ? `<span class="muted">${esc(I.name)} · ${I.rows.length} Zeilen</span>` : ""}
     ${S.lastImp ? `<button class="btn" data-act="impUndo">Letzten Import rückgängig machen</button>` : ""}</div>
     <p class="hint" style="margin-top:10px">Tipp: Als .xlsx kommen alle Monatsblätter auf einmal mit, eine CSV-Datei enthält nur das gerade geöffnete Blatt.</p></section>`;
   if (I.mode === "blocks" && I.bsheets) return vImportBlocks(pick);
-  if (!I.rows) return `<div class="stack">${pick}<section class="card"><h2>Was sich importieren lässt</h2><ul class="facts"><li>${ic("list")}<span><b>Buchungen:</b> eine Zeile pro Einnahme oder Ausgabe, mit Datum und Betrag. Kategorien werden bei Bedarf angelegt.</span></li><li>${ic("chart")}<span><b>Trades:</b> eine Zeile pro Kauf oder Verkauf, mit Datum, Wertpapier, Stück und Kurs oder Betrag.</span></li><li>${ic("bank")}<span><b>Vermögensstände:</b> eine Zeile pro Monat, eine Spalte pro Konto.</span></li></ul></section></div>`;
+  if (I.mode === "wealth" && I.wealth) return vImportWealth(pick);
+  if (!I.rows) return `<div class="stack">${pick}<section class="card"><h2>Was sich importieren lässt</h2><ul class="facts"><li>${ic("list")}<span><b>Buchungen:</b> eine Zeile pro Einnahme oder Ausgabe, mit Datum und Betrag. Kategorien werden bei Bedarf angelegt.</span></li><li>${ic("chart")}<span><b>Trades:</b> eine Zeile pro Kauf oder Verkauf, mit Datum, Wertpapier, Stück und Kurs oder Betrag.</span></li><li>${ic("bank")}<span><b>Vermögensstände:</b> eine Zeile pro Monat, eine Spalte pro Konto.</span></li><li>${ic("chart")}<span><b>Vermögensübersicht:</b> Spalten „Date“ und „Total“ mit Monaten wie 01.23. Wird automatisch erkannt.</span></li></ul></section></div>`;
   const opt = (v, l, cur) => `<option value="${v}"${cur === v ? " selected" : ""}>${l}</option>`;
   const maps = IMP_FIELDS[I.target].map(([k, l, req]) => `<label class="field"><span>${l}${req ? " *" : ""}</span><select class="input" id="imp-m-${k}" data-impmap="${k}"><option value="">nicht vorhanden</option>${I.headers.map((h, i) => `<option value="${i}"${I.map[k] === i ? " selected" : ""}>${esc(h)}</option>`).join("")}</select></label>`).join("");
   const extra = I.target === "tx" ? `<label class="field"><span>Vorzeichen des Betrags</span><select class="input" id="imp-sign">${opt("auto", "Minus bedeutet Ausgabe", I.sign)}${opt("exp", "Alle Zeilen sind Ausgaben", I.sign)}${opt("inc", "Alle Zeilen sind Einnahmen", I.sign)}</select></label>`
@@ -1472,7 +1541,13 @@ const A = {
   lockList() { L.mode = "list"; renderLock(); },
   lockCreate() { L.mode = "create"; renderLock(); },
   lock() { lock("Gesperrt."); },
-  go(el) { S.view = el.dataset.view; renderView(); scrollTo(0, 0); },
+  go(el) { S.view = el.dataset.view; if (S.view === "tx") S.filter = { q: "", type: "all", cat: "" }; renderView(); scrollTo(0, 0); },
+  filterTx(el) {
+    S.filter = { q: "", type: el.dataset.type || "all", cat: el.dataset.cat || "" };
+    if (el.dataset.m) S.month = el.dataset.m;
+    S.view = "tx"; renderView(); scrollTo(0, 0);
+  },
+  clearCat() { S.filter.cat = ""; renderView(); },
   prevM() { S.month = addMonth(S.month, -1); renderView(); },
   nextM() { S.month = addMonth(S.month, 1); renderView(); },
   ftype(el) { S.filter.type = el.dataset.type; renderView(); },
@@ -1551,6 +1626,11 @@ const A = {
         if (!a.pxd || it.d >= a.pxd) { a.px = it.amt / 100 / it.q; a.pxd = it.d; }
       }
       await saveInv();
+    } else if (I.target === "wealth") {
+      let acc = S.inv.accounts.find(a => a.kind === "total");
+      if (!acc) { acc = { id: "a_total", name: "Gesamtvermögen", kind: "total" }; S.inv.accounts.push(acc); }
+      for (const it of items) { const s = S.inv.snaps[it.m] = S.inv.snaps[it.m] || {}; s[acc.id] = Math.round(it.v * 100); n++; }
+      await saveInv();
     } else {
       const accFor = {};
       for (const j of Object.keys(I.cols)) if (I.cols[j]) {
@@ -1562,9 +1642,9 @@ const A = {
       for (const it of items) { const s = S.inv.snaps[it.m] = S.inv.snaps[it.m] || {}; for (const j of Object.keys(it.vals)) if (accFor[j]) s[accFor[j].id] = accFor[j].kind === "debt" ? Math.abs(it.vals[j]) : it.vals[j]; n++; }
       await saveInv();
     }
-    S.lastImp = I.target === "snap" || !n ? null : { target: I.target, batch };
-    const target = I.target; Object.assign(I, { rows: null, wb: null, sheets: null, grids: null, bsheets: null, mode: "table" });
-    S.view = n ? ({ tx: "tx", trade: "invest", snap: "wealth" })[target] : "import"; renderView();
+    S.lastImp = I.target === "snap" || I.target === "wealth" || !n ? null : { target: I.target, batch };
+    const target = I.target; Object.assign(I, { rows: null, wb: null, sheets: null, grids: null, bsheets: null, wealth: null, mode: "table", target: "tx" });
+    S.view = n ? ({ tx: "tx", trade: "invest", snap: "wealth", wealth: "wealth" })[target] : "import"; renderView();
     toast(n ? `${n} ${n === 1 ? "Zeile" : "Zeilen"} importiert${dup ? ", " + dup + " Dubletten übersprungen" : ""}${extra}.` : "Alle Zeilen waren schon vorhanden" + extra + ".");
   },
   impTable() { I.mode = "table"; I.wb ? useSheet(I.sheets[0]) : setRows(I.grids[0].grid); renderView(); },
