@@ -351,8 +351,20 @@ async function syncToken() {
   return Y.token;
 }
 const fsBase = () => `https://firestore.googleapis.com/v1/projects/${SYNC_CFG.projectId}/databases/(default)/documents/users/${Y.auth.uid}/docs`;
+/* Schutz gegen ältere App-Versionen, deren Offline-Komponente auch Abgleich-Antworten zwischengespeichert hat:
+   vor jedem Abruf werden solche Einträge entfernt, damit nie ein veralteter Stand als aktuell gilt. */
+async function purgeApiCache() {
+  if (!window.caches) return;
+  try {
+    for (const k of await caches.keys()) {
+      const c = await caches.open(k);
+      for (const req of await c.keys()) if (/^https:\/\/(firestore|identitytoolkit|securetoken)\.googleapis\.com\//.test(req.url)) await c.delete(req);
+    }
+  } catch (e) {}
+}
 async function fsReq(method, url, body) {
-  const r = await fetch(url, { method, headers: Object.assign({ Authorization: "Bearer " + await syncToken() }, body ? { "Content-Type": "application/json" } : {}), body: body ? JSON.stringify(body) : undefined });
+  if (method === "GET") await purgeApiCache();
+  const r = await fetch(url, { method, cache: "no-store", headers: Object.assign({ Authorization: "Bearer " + await syncToken() }, body ? { "Content-Type": "application/json" } : {}), body: body ? JSON.stringify(body) : undefined });
   if (!r.ok) throw Object.assign(new Error("fs"), { status: r.status });
   return r.json().catch(() => ({}));
 }
@@ -386,10 +398,11 @@ async function syncPass() {
       else if ((s && lh === s.h) || (data.ts || 0) >= (loc.ts || 0)) { S.store.apply(id, data); st[id] = { h: rh, ut: r.ut }; changed = true; }
       else st[id] = { h: lh, ut: await fsPut(id, loc) };
     }
+    const suspicious = remote.size === 0 && Object.keys(st).length > 0;
     for (const [id, loc] of [...docs]) {
       if (remote.has(id)) continue;
       const s = st[id], lh = sig(loc);
-      if (s && s.h === lh) { S.store.apply(id, null); delete st[id]; changed = true; }
+      if (s && s.h === lh && !suspicious) { S.store.apply(id, null); delete st[id]; changed = true; }
       else st[id] = { h: lh, ut: await fsPut(id, loc) };
     }
     for (const id of Object.keys(st)) if (!docs.has(id) && !remote.has(id)) delete st[id];
@@ -562,7 +575,7 @@ document.addEventListener("visibilitychange", () => {
 function lock(msg) {
   clearTimeout(idleTimer);
   Object.assign(S, { pid: null, key: null, meta: null, settings: null, inv: null, months: {}, ct: {}, view: "overview", filter: { q: "", type: "all" } });
-  Object.assign(I, { rows: null, wb: null, sheets: null });
+  Object.assign(I, { rows: null, wb: null, sheets: null, grids: null, bsheets: null, mode: "table" });
   S.dirty.clear(); closeModal();
   L.mode = "list"; L.pid = null;
   renderLock();
@@ -856,7 +869,7 @@ const sumOf = (arr, k) => arr.reduce((s, x) => s + x[k], 0);
 function parseNum(v) {
   if (typeof v === "number") return isFinite(v) ? v : null;
   let s = String(v ?? "").trim(); if (!s) return null;
-  const neg = /^\(.*\)$/.test(s) || /^[-−–]/.test(s) || /[-−–]$/.test(s);
+  const neg = /^\(.*\)$/.test(s) || /^[-\u2212\u2013]/.test(s) || /[-\u2212\u2013]$/.test(s);
   s = s.replace(/[^\d.,]/g, ""); if (!/\d/.test(s)) return null;
   const lc = s.lastIndexOf(","), ld = s.lastIndexOf(".");
   if (lc > -1 && ld > -1) s = lc > ld ? s.replace(/\./g, "").replace(",", ".") : s.replace(/,/g, "");
@@ -1114,15 +1127,135 @@ const loadScript = src => new Promise((res, rej) => { const s = document.createE
 function useSheet(n) { I.sheet = n; setRows(XLSX.utils.sheet_to_json(I.wb.Sheets[n], { header: 1, raw: true, defval: "" })); }
 async function loadImportFile(file) {
   try {
+    I.target = "tx"; I.mode = "table"; I.rows = null;
     if (/\.(xlsx|xlsm|xls|ods)$/i.test(file.name)) {
       if (!window.XLSX) await loadScript("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js");
-      I.wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true }); I.sheets = I.wb.SheetNames; useSheet(I.sheets[0]);
-    } else { I.wb = null; I.sheets = null; setRows(parseCsv(await file.text())); }
+      I.wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true }); I.sheets = I.wb.SheetNames;
+      I.grids = I.sheets.map(n => ({ name: n, grid: XLSX.utils.sheet_to_json(I.wb.Sheets[n], { header: 1, raw: true, defval: "" }) }));
+    } else { I.wb = null; I.sheets = null; I.grids = [{ name: file.name.replace(/\.[^.]+$/, ""), grid: parseCsv(await file.text()) }]; }
     I.name = file.name;
-  } catch (e) { I.rows = null; toast("Die Datei konnte nicht gelesen werden."); }
+    if (!detectMonthSheets()) I.wb ? useSheet(I.sheets[0]) : setRows(I.grids[0].grid);
+  } catch (e) { I.rows = null; I.mode = "table"; toast("Die Datei konnte nicht gelesen werden."); }
   renderView();
 }
+
+/* ---------- Import: Monatsblätter mit Kategorie-Blöcken ----------
+   Erkennt Tabellen, in denen pro Monat ein Blatt steht und jede Kategorie ein eigener Block mit „Betrag“-Spalte ist,
+   gruppiert unter „Ausgaben:“ und „Einkommen:“. Summen- und Auswertungszeilen werden übersprungen. */
+const cellStr = v => v instanceof Date ? "" : String(v ?? "").trim();
+const SEC_RE = /^(ausgaben|einkommen|einnahmen)\s*:?$/i, END_RE = /^(final|summe|gesamt|auswertung)\b/i;
+const MONTH_WORDS = { januar: 1, jan: 1, january: 1, februar: 2, feb: 2, february: 2, "märz": 3, maerz: 3, marz: 3, mrz: 3, "mär": 3, march: 3, mar: 3, april: 4, apr: 4, mai: 5, may: 5, juni: 6, jun: 6, june: 6, juli: 7, jul: 7, july: 7, august: 8, aug: 8,
+  september: 9, sept: 9, sep: 9, oktober: 10, okt: 10, october: 10, oct: 10, november: 11, nov: 11, dezember: 12, dez: 12, december: 12, dec: 12 };
+function findBlocks(grid) {
+  const marks = [], heads = [];
+  grid.forEach((row, r) => (row || []).forEach((v, c) => {
+    const s = cellStr(v);
+    if (SEC_RE.test(s)) marks.push({ r, type: /^ausgaben/i.test(s) ? "exp" : "inc" });
+    else if (/^final\b/i.test(s)) marks.push({ r, type: null });
+    else if (/^betrag(\s*(in\s*)?(€|eur))?$/i.test(s)) heads.push({ r, c });
+  }));
+  const blocks = [];
+  for (const { r, c } of heads) {
+    const mk = marks.filter(m => m.r < r).pop(); if (!mk || !mk.type) continue;
+    const prevB = Math.max(-1, ...heads.filter(h => h.r === r && h.c < c).map(h => h.c));
+    let name = "", labelCol = prevB + 1;
+    for (const rr of [r - 1, r - 2]) {
+      const row = grid[rr] || [];
+      for (let k = prevB + 1; k <= c; k++) { const s = cellStr(row[k]); if (s && !SEC_RE.test(s)) { name = s.replace(/:$/, ""); labelCol = k; break; } }
+      if (name) break;
+    }
+    const cols = []; for (let k = Math.max(labelCol, prevB + 1); k < c; k++) cols.push(k);
+    const dateCol = cols.find(k => /datum|date|tag/i.test(cellStr((grid[r] || [])[k])));
+    const textCols = cols.filter(k => k !== dateCol);
+    const rows = [];
+    for (let rr = r + 1; rr < grid.length && rr < r + 400; rr++) {
+      const row = grid[rr] || [];
+      if (row.some((v, k) => k <= c && END_RE.test(cellStr(v))) || row.some(v => SEC_RE.test(cellStr(v)))) break;
+      const a = parseNum(row[c]); if (!a) continue;
+      rows.push({ a, d: dateCol == null ? "" : row[dateCol], n: textCols.map(k => cellStr(row[k])).filter(Boolean).join(" · ") });
+    }
+    blocks.push({ name: name || "Ohne Namen", type: mk.type, rows });
+  }
+  return blocks.filter(b => b.rows.length);
+}
+function guessMonth(name, grid, blocks) {
+  const s = name.toLowerCase(); let m = null, y = null, k;
+  if ((k = s.match(/(20\d{2})[-_.\/ ](0?[1-9]|1[0-2])(?!\d)/))) return k[1] + "-" + pad(+k[2]);
+  if ((k = s.match(/(?:^|\D)(0?[1-9]|1[0-2])[-_.\/ ](20\d{2})(?!\d)/))) return k[2] + "-" + pad(+k[1]);
+  for (const w of s.match(/[a-zäöü]+/g) || []) if (MONTH_WORDS[w]) { m = MONTH_WORDS[w]; break; }
+  if ((k = s.match(/(?:^|\D)(20\d{2})(?!\d)/))) y = +k[1];
+  else if (m && (k = s.match(/[a-zäöü]+\.?\s*['’]?(\d{2})(?!\d)/))) y = 2000 + +k[1];
+  const dates = grid.flat().filter(v => v instanceof Date && !isNaN(v));
+  const textMonths = blocks.flatMap(b => b.rows.map(r => (cellStr(r.d).match(/^\d{1,2}\.(\d{1,2})/) || [])[1])).filter(Boolean).map(Number);
+  const mode = arr => { const c = {}; arr.forEach(x => c[x] = (c[x] || 0) + 1); return Number(Object.keys(c).sort((a, b) => c[b] - c[a])[0]) || null; };
+  if (!m) m = dates.length ? mode(dates.map(d => new Date(d.getTime() + 12 * 3600e3).getUTCMonth() + 1)) : mode(textMonths);
+  if (!y && dates.length) y = mode(dates.map(d => new Date(d.getTime() + 12 * 3600e3).getUTCFullYear()));
+  if (!m) return "";
+  if (!y) { const now = new Date(); y = now.getFullYear(); if (m > now.getMonth() + 1) y--; }
+  return y + "-" + pad(m);
+}
+function blockCatDefault(b) {
+  const name = b.type === "inc" && /^sonstig/i.test(b.name) ? "Sonstige Einnahmen" : b.name;
+  const ex = S.settings.cats.find(c => c.type === b.type && c.name.toLowerCase() === name.toLowerCase());
+  return ex ? ex.name : name.slice(0, 30);
+}
+function detectMonthSheets() {
+  const sheets = I.grids.map(g => ({ name: g.name, grid: g.grid, blocks: findBlocks(g.grid) })).filter(s => s.blocks.length);
+  if (!sheets.length) return false;
+  sheets.forEach(s => { s.ym = guessMonth(s.name, s.grid, s.blocks); s.on = true; });
+  I.bsheets = sheets; I.bmap = {};
+  for (const s of sheets) for (const b of s.blocks) { const key = b.type + "|" + b.name; if (!I.bmap[key]) I.bmap[key] = { name: b.name, type: b.type, cat: /erspart|vormonat|übertrag|uebertrag|anfangs/i.test(b.name) ? "" : blockCatDefault(b) }; }
+  I.mode = "blocks"; I.target = "tx";
+  return true;
+}
+function blockDate(raw, ym) {
+  if (raw instanceof Date) return parseDate(raw);
+  const s = cellStr(raw); if (!s) return null;
+  if (/^\d{1,2}\.\d{1,2}\.\d{2,4}|^\d{4}-\d{1,2}-\d{1,2}/.test(s)) return parseDate(s);
+  const k = s.match(/^(\d{1,2})\.(\d{1,2})(?!\d)/); if (!k || !ym) return null;
+  const [y, m] = ym.split("-").map(Number), mo = +k[2];
+  return parseDate(k[1] + "." + mo + "." + (y + (m === 1 && mo === 12 ? -1 : m === 12 && mo === 1 ? 1 : 0)));
+}
+function buildBlocks(only) {
+  const items = [];
+  for (const s of I.bsheets) {
+    if (!s.on || !/^\d{4}-\d{2}$/.test(s.ym) || (only && only !== s)) continue;
+    for (const b of s.blocks) {
+      const map = I.bmap[b.type + "|" + b.name]; if (!map || !map.cat) continue;
+      let last = null;
+      for (const r of b.rows) {
+        let t = b.type; if (t === "exp" ? r.a > 0 : r.a < 0) t = t === "exp" ? "inc" : "exp";
+        const real = blockDate(r.d, s.ym); if (real) last = real;
+        items.push({ d: real || last || s.ym + "-01", t, a: Math.round(Math.abs(r.a) * 100), cat: t === b.type ? map.cat : (t === "inc" ? "Erstattungen" : "Sonstiges"), n: r.n.slice(0, 80) });
+      }
+    }
+  }
+  return items;
+}
+function vImportBlocks(pick) {
+  const all = buildBlocks(), keys = Object.keys(I.bmap);
+  const sheetRows = I.bsheets.map((s, i) => { const it = buildBlocks(s), inc = it.filter(x => x.t === "inc").reduce((a, x) => a + x.a, 0), exp = it.filter(x => x.t === "exp").reduce((a, x) => a + x.a, 0);
+    return `<div class="lrow"><label class="check grow"><input type="checkbox" id="imp-s-${i}" data-impsheet="${i}"${s.on ? " checked" : ""}>${esc(s.name)}</label>
+      <input class="input" id="imp-ym-${i}" data-impym="${i}" type="month" value="${esc(s.ym)}" aria-label="Monat für ${esc(s.name)}" style="width:170px;text-align:left">
+      <span class="two" style="min-width:150px"><small class="num exp">−${fmt(exp)}</small><small class="num inc">+${fmt(inc)}</small></span></div>`; }).join("");
+  const catSel = (key, i) => { const m = I.bmap[key], cats = S.settings.cats.filter(c => c.type === m.type).map(c => c.name), def = blockCatDefault(m);
+    const names = cats.includes(def) ? cats : [def, ...cats];
+    return `<select class="input" id="imp-b-${i}" data-impblock="${esc(key)}" aria-label="Kategorie für ${esc(m.name)}" style="width:auto;max-width:220px;text-align:left"><option value="">Nicht importieren</option>${names.map(n => `<option value="${esc(n)}"${m.cat === n ? " selected" : ""}>${cats.includes(n) ? esc(n) : "Neu: " + esc(n)}</option>`).join("")}</select>`; };
+  const blockRows = ["exp", "inc"].map(t => { const ks = keys.filter(k => I.bmap[k].type === t); if (!ks.length) return "";
+    return `<div class="day"><span>${t === "exp" ? "Ausgaben" : "Einkommen"}</span></div>` + ks.map(k => `<div class="lrow"><span class="grow">${esc(I.bmap[k].name)}</span>${catSel(k, keys.indexOf(k))}</div>`).join(""); }).join("");
+  const missing = I.bsheets.some(s => s.on && !/^\d{4}-\d{2}$/.test(s.ym));
+  return `<div class="stack">${pick}
+    <section class="card"><h2>Monatsblätter<span class="pill ok">Layout erkannt</span></h2>
+      <p class="hint" style="margin-bottom:6px">Prüfe Monat und Jahr je Blatt. Datumsangaben ohne Jahr bekommen das Jahr des Blatts, Zeilen ohne Datum das Datum der Zeile darüber oder den Monatsersten. Vergleiche die Summen rechts mit deiner Tabelle.</p>
+      ${sheetRows}${missing ? '<p class="err">Bei mindestens einem Blatt fehlt der Monat.</p>' : ""}</section>
+    <section class="card"><h2>Kategorien</h2><p class="hint" style="margin-bottom:6px">Jeder Block deiner Tabelle wird einer Kategorie zugeordnet. Positive Beträge unter Ausgaben werden als Erstattung gebucht.</p>${blockRows}</section>
+    <section class="card"><h2>Vorschau<span class="pill ${all.length ? "ok" : "bad"}">${all.length} Buchungen erkannt</span></h2>
+      ${all.length ? `<div class="tblwrap"><table class="prev"><tr><th>Datum</th><th>Art</th><th>Betrag</th><th>Kategorie</th><th>Notiz</th></tr>${all.slice(0, 8).map(it => `<tr><td>${shortDate(it.d)}</td><td>${it.t === "inc" ? "Einnahme" : "Ausgabe"}</td><td class="num">${fmt(it.a)}</td><td>${esc(it.cat)}</td><td>${esc(it.n)}</td></tr>`).join("")}</table></div>
+        <div class="row" style="margin-top:14px"><button class="btn primary" data-act="impRun">${all.length} Buchungen importieren</button><button class="btn ghost" data-act="impTable">Spalten stattdessen selbst zuordnen</button></div>`
+        : `<p class="muted">Keine Buchung ausgewählt. Wähle mindestens ein Blatt und eine Kategorie.</p>`}</section></div>`;
+}
 function buildImport() {
+  if (I.mode === "blocks") return buildBlocks();
   const M = I.map, cell = (r, k) => M[k] == null ? "" : r[M[k]], str = (r, k) => String(cell(r, k) ?? "").trim(), items = [];
   for (const r of I.rows) {
     const d = parseDate(cell(r, "date")); if (!d) continue;
@@ -1147,8 +1280,10 @@ function buildImport() {
 function vImport() {
   const pick = `<section class="card"><h2>Tabelle aus Google Sheets übernehmen</h2>
     <p class="prose">Öffne deine Tabelle in Google Sheets und wähle Datei, Herunterladen, dann Microsoft Excel (.xlsx) oder CSV. Lade die Datei hier hoch. Sie wird nur in deinem Browser gelesen und danach verschlüsselt gespeichert.</p>
-    <div class="row" style="margin-top:14px"><label class="btn primary" style="cursor:pointer">${ic("upload")}Datei wählen<input type="file" id="imp-file" accept=".csv,.txt,.tsv,.xlsx,.xls,.ods" hidden></label>${I.rows ? `<span class="muted">${esc(I.name)} · ${I.rows.length} Zeilen</span>` : ""}
-    ${S.lastImp ? `<button class="btn" data-act="impUndo">Letzten Import rückgängig machen</button>` : ""}</div></section>`;
+    <div class="row" style="margin-top:14px"><label class="btn primary" style="cursor:pointer">${ic("upload")}Datei wählen<input type="file" id="imp-file" accept=".csv,.txt,.tsv,.xlsx,.xls,.ods" hidden></label>${I.mode === "blocks" ? `<span class="muted">${esc(I.name)} · ${I.bsheets.length} ${I.bsheets.length === 1 ? "Monatsblatt" : "Monatsblätter"}</span>` : I.rows ? `<span class="muted">${esc(I.name)} · ${I.rows.length} Zeilen</span>` : ""}
+    ${S.lastImp ? `<button class="btn" data-act="impUndo">Letzten Import rückgängig machen</button>` : ""}</div>
+    <p class="hint" style="margin-top:10px">Tipp: Als .xlsx kommen alle Monatsblätter auf einmal mit, eine CSV-Datei enthält nur das gerade geöffnete Blatt.</p></section>`;
+  if (I.mode === "blocks" && I.bsheets) return vImportBlocks(pick);
   if (!I.rows) return `<div class="stack">${pick}<section class="card"><h2>Was sich importieren lässt</h2><ul class="facts"><li>${ic("list")}<span><b>Buchungen:</b> eine Zeile pro Einnahme oder Ausgabe, mit Datum und Betrag. Kategorien werden bei Bedarf angelegt.</span></li><li>${ic("chart")}<span><b>Trades:</b> eine Zeile pro Kauf oder Verkauf, mit Datum, Wertpapier, Stück und Kurs oder Betrag.</span></li><li>${ic("bank")}<span><b>Vermögensstände:</b> eine Zeile pro Monat, eine Spalte pro Konto.</span></li></ul></section></div>`;
   const opt = (v, l, cur) => `<option value="${v}"${cur === v ? " selected" : ""}>${l}</option>`;
   const maps = IMP_FIELDS[I.target].map(([k, l, req]) => `<label class="field"><span>${l}${req ? " *" : ""}</span><select class="input" id="imp-m-${k}" data-impmap="${k}"><option value="">nicht vorhanden</option>${I.headers.map((h, i) => `<option value="${i}"${I.map[k] === i ? " selected" : ""}>${esc(h)}</option>`).join("")}</select></label>`).join("");
@@ -1328,10 +1463,11 @@ const A = {
       await saveInv();
     }
     S.lastImp = I.target === "snap" || !n ? null : { target: I.target, batch };
-    const target = I.target; Object.assign(I, { rows: null, wb: null, sheets: null });
+    const target = I.target; Object.assign(I, { rows: null, wb: null, sheets: null, grids: null, bsheets: null, mode: "table" });
     S.view = n ? ({ tx: "tx", trade: "invest", snap: "wealth" })[target] : "import"; renderView();
     toast(n ? `${n} ${n === 1 ? "Zeile" : "Zeilen"} importiert${dup ? ", " + dup + " Dubletten übersprungen" : ""}.` : "Alle Zeilen waren schon vorhanden.");
   },
+  impTable() { I.mode = "table"; I.wb ? useSheet(I.sheets[0]) : setRows(I.grids[0].grid); renderView(); },
   async impUndo() {
     const li = S.lastImp; if (!li) return; S.lastImp = null;
     if (li.target === "tx") { const ms = Object.keys(S.months).filter(m => S.months[m].some(t => t.imp === li.batch)); for (const m of ms) put(m, S.months[m].filter(t => t.imp !== li.batch)); renderView(); for (const m of ms) await saveMonth(m); }
@@ -1519,6 +1655,9 @@ document.addEventListener("change", async e => {
   else if (el.id === "as-sel") $("#as-new").hidden = el.value !== "__new";
   else if (el.id === "tr-plan") $("#tr-fee").value = el.checked ? "0,00" : "1,00";
   else if (el.id === "imp-file" && el.files[0]) loadImportFile(el.files[0]);
+  else if (el.dataset.impsheet) { I.bsheets[+el.dataset.impsheet].on = el.checked; renderView(); }
+  else if (el.dataset.impym) { I.bsheets[+el.dataset.impym].ym = el.value; renderView(); }
+  else if (el.dataset.impblock != null && I.bmap[el.dataset.impblock]) { I.bmap[el.dataset.impblock].cat = el.value; renderView(); }
   else if (el.id === "imp-target") { I.target = el.value; guessMap(); renderView(); }
   else if (el.id === "imp-sheet") { useSheet(el.value); renderView(); }
   else if (el.id === "imp-sign") { I.sign = el.value; renderView(); }
