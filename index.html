@@ -174,6 +174,15 @@ main{min-width:0;padding-bottom:48px}
 [hidden]{display:none!important}
 .toastbtn{margin-left:10px;border:0;background:none;color:var(--accent-soft);font:inherit;font-weight:700;text-decoration:underline;padding:4px 2px;cursor:pointer}
 .lrow.acc{flex-wrap:nowrap}
+.drag{display:inline-grid;place-items:center;width:32px;height:40px;margin-left:-6px;border:0;border-radius:8px;background:none;color:var(--muted);cursor:grab;touch-action:none;flex:none}
+.drag:hover,.drag:focus-visible{background:var(--sunken);color:var(--ink)}
+.drag svg{fill:currentColor;stroke:none}
+.catrow{background:var(--surface);position:relative;flex-wrap:nowrap;gap:10px}
+.catrow .grow{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.catrow .input{width:96px;flex:none}
+.catrow.dragging{z-index:5;box-shadow:var(--shadow);border-radius:10px;border-top-color:transparent}
+.catrow.dragging .drag{cursor:grabbing}
+body.is-dragging{user-select:none;-webkit-user-select:none}
 .accbtns{display:flex;gap:0;flex:none}
 .accbtns .iconbtn{width:36px;height:36px}
 .iconbtn[disabled]{opacity:.3;cursor:default}
@@ -194,6 +203,24 @@ table.prev th{color:var(--muted);font-weight:600}
 .chart .cost{fill:none;stroke:var(--muted);stroke-width:1.5;stroke-dasharray:5 4}
 .chart .pt{fill:var(--surface);stroke:var(--accent);stroke-width:2}
 .chips{display:flex;flex-wrap:wrap;gap:8px 16px}
+.catrowbtn{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:6px 10px;align-items:center;width:100%;padding:10px 8px;border:0;border-top:1px solid var(--line);background:none;text-align:left;color:inherit;font:inherit}
+.catrowbtn:first-of-type{border-top:0}
+.catrowbtn:hover{background:var(--sunken)}
+.catrowbtn[aria-pressed="true"]{background:var(--accent-soft);border-radius:10px;border-top-color:transparent}
+.catrowbtn[aria-pressed="true"]+.catrowbtn{border-top-color:transparent}
+.catrowbtn small{display:block;color:var(--muted);font-size:12.5px}
+.spark{grid-column:2/4;display:flex;align-items:flex-end;gap:3px;height:22px}
+.spark i{flex:1;min-width:0;border-radius:2px 2px 0 0;background:currentColor;opacity:.85}
+.spark i.z{height:2px!important;opacity:.18}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:16px}
+.stats .kpi{display:flex;flex-direction:column;gap:2px;padding:10px 12px}
+.stats .kpi b{font-size:15px;text-align:left;white-space:normal}
+.stats .kpi small{grid-column:auto}
+.catchart .cbar{cursor:pointer}
+.catchart .cbar:hover{opacity:.8}
+.catchart .val{fill:var(--ink);font-size:11px}
+.catchart .cur{fill:var(--ink);font-weight:700}
+.catchart .budget{stroke:var(--exp);stroke-width:1.5;stroke-dasharray:5 4}
 .kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:16px}
 .kpi{display:flex;flex-direction:column;gap:4px;padding:12px;border-radius:12px;background:var(--sunken);min-width:0}
 .kpi b{font-size:18px;font-weight:600;white-space:nowrap}
@@ -292,6 +319,8 @@ const ICONS = {
   bank: '<path d="M3 21h18M4 10h16M12 3l9 5H3zM6 10v8M10 10v8M14 10v8M18 10v8"/>',
   upload: '<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>',
   up: '<path d="M6 15l6-6 6 6"/>', down: '<path d="M6 9l6 6 6-6"/>',
+  grip: '<circle cx="9" cy="6" r="1.2"/><circle cx="15" cy="6" r="1.2"/><circle cx="9" cy="12" r="1.2"/><circle cx="15" cy="12" r="1.2"/><circle cx="9" cy="18" r="1.2"/><circle cx="15" cy="18" r="1.2"/>',
+  tag: '<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
   edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
   finger: '<path d="M12 11v3a8 8 0 0 0 1.2 4.5M8.5 13v-2a3.5 3.5 0 0 1 7 0v3a12 12 0 0 0 .8 4.2M5.5 15v-4a6.5 6.5 0 0 1 13 0v2M8.8 20a12 12 0 0 1-.3-3.5"/>'
 };
@@ -735,11 +764,11 @@ function renderLock() {
 }
 
 /* ---------- App-Rahmen ---------- */
-const VIEWS = [["overview", "Übersicht", "home"], ["tx", "Buchungen", "list"], ["rec", "Fixposten", "repeat"], ["invest", "Investments", "chart"], ["wealth", "Vermögen", "bank"], ["import", "Import", "upload"], ["settings", "Einstellungen", "gear"]];
+const VIEWS = [["overview", "Übersicht", "home"], ["wealth", "Vermögen", "bank"], ["tx", "Buchungen", "list"], ["cats", "Kategorien", "tag"], ["rec", "Fixposten", "repeat"], ["invest", "Investments", "chart"], ["import", "Import", "upload"], ["settings", "Einstellungen", "gear"]];
 function renderShell() {
   const btn = ([v, l, i], lab) => `<button data-act="go" data-view="${v}">${ic(i)}<span>${lab || l}</span></button>`;
   const nav = VIEWS.map(v => btn(v)).join("");
-  const tabs = [["overview"], ["tx"], ["invest", "Depot"], ["wealth"], ["settings", "Mehr"]].map(([k, lab]) => btn(VIEWS.find(x => x[0] === k), lab)).join("");
+  const tabs = [["overview"], ["wealth"], ["tx"], ["cats"], ["settings", "Mehr"]].map(([k, lab]) => btn(VIEWS.find(x => x[0] === k), lab)).join("");
   $("#root").innerHTML = `<div class="app">
     <aside class="rail">
       <div class="brand"><span class="mark">F</span><b>Finance Track</b></div>
@@ -769,7 +798,7 @@ function renderView() {
   $("#monthnav").hidden = S.view !== "overview" && S.view !== "tx";
   $("#mlabel").textContent = monthLabel(S.month);
   const keep = document.activeElement && document.activeElement.id;
-  $("#view").innerHTML = ({ overview: vOverview, tx: vTx, rec: vRec, invest: vInvest, wealth: vWealth, import: vImport, settings: vSettings })[S.view]();
+  $("#view").innerHTML = ({ overview: vOverview, tx: vTx, cats: vCats, rec: vRec, invest: vInvest, wealth: vWealth, import: vImport, settings: vSettings })[S.view]();
   if (keep === "tx-q") { const q = $("#tx-q"); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }
 }
 
@@ -900,6 +929,61 @@ function recDialog(r) {
       <div class="row"><button type="button" class="btn ghost" data-act="close">Abbrechen</button><button class="btn primary">Speichern</button></div></div>
   </form>`);
   $("#modal").addEventListener("change", e => { if (e.target.name === "type") $("#tx-cat").innerHTML = catOptions(e.target.value, ""); });
+}
+
+/* ---------- Kategorien: Jahr je Kategorie, mit Monatsverlauf ---------- */
+function catYearData(y, t) {
+  const ms = Array.from({ length: 12 }, (_, i) => y + "-" + pad(i + 1)), known = new Set(S.settings.cats.map(c => c.id)), data = new Map();
+  ms.forEach((m, i) => { for (const tx of txOf(m)) if (tx.t === t) { const id = known.has(tx.c) ? tx.c : "__none"; const d = data.get(id) || { arr: Array(12).fill(0), n: 0 }; d.arr[i] += tx.a; d.n++; data.set(id, d); } });
+  const list = [...S.settings.cats.filter(c => c.type === t), ...(data.has("__none") ? [{ id: "__none", name: "Ohne Kategorie", color: "#6B7A99", budget: 0 }] : [])];
+  return { ms, rows: list.map(c => { const d = data.get(c.id) || { arr: Array(12).fill(0), n: 0 }; return { c, arr: d.arr, n: d.n, total: d.arr.reduce((a, b) => a + b, 0) }; }) };
+}
+function catChart(r, ms, t) {
+  const vw = ($("#view") || {}).clientWidth || 600, W = Math.max(280, Math.round(innerWidth > 860 ? (vw - 20) / 2.15 - 42 : vw - 42)), H = 220, l = 58, rr = 8, top = 16, b = 26;
+  const budget = t === "exp" ? r.c.budget || 0 : 0, max = Math.max(100, ...r.arr, budget), step = niceStep(max / 4), hi = Math.ceil(max / step) * step;
+  const ys = v => top + (hi - v) / hi * (H - top - b), slot = (W - l - rr) / 12, bw = Math.max(6, slot * 0.62), cur = curMonth(), narrow = slot < 30;
+  let g = ""; for (let v = 0; v <= hi + 1; v += step) g += `<line class="grid" x1="${l}" x2="${W - rr}" y1="${ys(v).toFixed(1)}" y2="${ys(v).toFixed(1)}"/><text x="${l - 6}" y="${(ys(v) + 4).toFixed(1)}" text-anchor="end">${EUR0.format(v / 100)}</text>`;
+  const peak = Math.max(...r.arr);
+  const bars = r.arr.map((v, i) => { const x = l + i * slot + (slot - bw) / 2, y = ys(v), m = ms[i];
+    return `<rect class="cbar" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(v ? 2 : 0, ys(0) - y).toFixed(1)}" rx="3" fill="${safeColor(r.c.color)}" data-act="filterTx" data-type="${t}" data-cat="${esc(r.c.id)}" data-m="${m}"><title>${esc(monthLabel(m))}: ${fmt(v)}</title></rect>
+      ${v && (!narrow || v === peak) ? `<text x="${(x + bw / 2).toFixed(1)}" y="${(y - 5).toFixed(1)}" text-anchor="middle" class="val">${EUR0.format(v / 100)}</text>` : ""}
+      <text x="${(l + i * slot + slot / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle"${m === cur ? ' class="cur"' : ""}>${narrow ? monthShort(m).slice(0, 1) : esc(monthShort(m))}</text>`; }).join("");
+  const bl = budget ? `<line class="budget" x1="${l}" x2="${W - rr}" y1="${ys(budget).toFixed(1)}" y2="${ys(budget).toFixed(1)}"/><text x="${W - rr}" y="${(ys(budget) - 5).toFixed(1)}" text-anchor="end" class="val">Budget ${EUR0.format(budget / 100)}</text>` : "";
+  return `<svg class="chart catchart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(r.c.name)} je Monat">${g}${bl}${bars}</svg>`;
+}
+function vCats() {
+  const nowY = +curMonth().slice(0, 4), y = S.catYear || nowY, t = S.catType || "exp", sort = S.catSort || "amount";
+  const { ms, rows: all } = catYearData(y, t), yearTotal = all.reduce((a, r) => a + r.total, 0);
+  const rows = sort === "amount" ? [...all].sort((a, b) => b.total - a.total) : all, active = rows.filter(r => r.total), idle = rows.filter(r => !r.total);
+  const elapsed = y < nowY ? 12 : y > nowY ? 0 : +curMonth().slice(5, 7);
+  const sel = active.find(r => r.c.id === S.catSel) || active[0];
+  const seg = (act, key, cur, opts) => `<div class="seg">${opts.map(([v, l]) => `<button data-act="${act}" data-${key}="${v}" aria-pressed="${cur === v}">${l}</button>`).join("")}</div>`;
+  const controls = `<section class="card"><div class="tools" style="justify-content:space-between">
+      <div class="monthnav"><button class="iconbtn" data-act="catYear" data-dir="-1" aria-label="Vorheriges Jahr">${ic("left")}</button><b style="min-width:64px">${y}</b><button class="iconbtn" data-act="catYear" data-dir="1" aria-label="Nächstes Jahr">${ic("right")}</button></div>
+      ${seg("catType", "type", t, [["exp", "Ausgaben"], ["inc", "Einnahmen"]])}${seg("catSort", "sort", sort, [["amount", "Nach Betrag"], ["own", "Eigene Reihenfolge"]])}</div>
+    <div class="kvwrap" style="margin-top:14px"><dl class="kv"><dt>${t === "exp" ? "Ausgaben" : "Einnahmen"} ${y}</dt><dd class="num ${t}">${fmt(yearTotal)}</dd>${elapsed ? `<dt>Durchschnitt pro Monat${y === nowY ? `, ${elapsed} ${elapsed === 1 ? "Monat" : "Monate"}` : ""}</dt><dd class="num">${fmt(Math.round(yearTotal / elapsed))}</dd>` : ""}</dl></div></section>`;
+  if (!active.length) return `<div class="stack">${controls}<div class="card empty"><p>Keine ${t === "exp" ? "Ausgaben" : "Einnahmen"} in ${y}.</p></div></div>`;
+  const list = active.map(r => { const mx = Math.max(...r.arr);
+    return `<button class="catrowbtn" data-act="catSel" data-id="${esc(r.c.id)}" aria-pressed="${r === sel}"><span class="dot" style="background:${safeColor(r.c.color)}"></span>
+      <span style="min-width:0"><b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500">${esc(r.c.name)}</b><small>${r.n} ${r.n === 1 ? "Buchung" : "Buchungen"} · ${Math.round(r.total / yearTotal * 100)} %</small></span>
+      <span class="num">${fmt(r.total)}</span>
+      <span class="spark" style="color:${safeColor(r.c.color)}" aria-hidden="true">${r.arr.map(v => `<i${v ? "" : ' class="z"'} style="height:${v ? Math.max(12, v / mx * 100).toFixed(0) : 0}%"></i>`).join("")}</span></button>`; }).join("");
+  let detail = "";
+  if (sel) {
+    const peakI = sel.arr.indexOf(Math.max(...sel.arr)), monthsWith = sel.arr.filter(Boolean).length;
+    const txs = ms.map(m => ({ m, list: txOf(m).filter(x => x.t === t && (sel.c.id === "__none" ? !S.settings.cats.some(c => c.id === x.c) : x.c === sel.c.id)).sort((a, b) => b.d.localeCompare(a.d)) })).filter(x => x.list.length).reverse();
+    detail = `<section class="card" id="catdetail"><h2><span class="row" style="gap:10px"><span class="dot" style="background:${safeColor(sel.c.color)}"></span>${esc(sel.c.name)}</span><span class="num ${t}">${fmt(sel.total)}</span></h2>
+      <div class="stats">
+        <div class="kpi"><span class="eyebrow">Ø pro Monat</span><b class="num">${elapsed ? fmt(Math.round(sel.total / elapsed)) : "–"}</b></div>
+        <div class="kpi"><span class="eyebrow">Stärkster Monat</span><b class="num">${fmt(sel.arr[peakI])}</b><small>${esc(monthLabel(ms[peakI]))}</small></div>
+        <div class="kpi"><span class="eyebrow">Monate mit Buchungen</span><b class="num">${monthsWith} von ${elapsed || 12}</b></div>
+        ${t === "exp" && sel.c.budget ? `<div class="kpi"><span class="eyebrow">Budget ${fmt(sel.c.budget)}</span><b class="num ${sel.arr.some(v => v > sel.c.budget) ? "exp" : "inc"}">${sel.arr.filter(v => v > sel.c.budget).length}× überschritten</b></div>` : ""}</div>
+      <div class="tblwrap">${catChart(sel, ms, t)}</div><p class="hint" style="margin-top:6px">Tippe auf einen Balken, um die Buchungen dieses Monats zu sehen.</p>
+      <div style="margin-top:8px">${txs.map(g => `<div class="day"><span>${esc(monthLabel(g.m))}</span><span class="num">${fmt(g.list.reduce((a, x) => a + x.a, 0))}</span></div>${g.list.map(txRow).join("")}`).join("")}</div></section>`;
+  }
+  return `<div class="stack">${controls}
+    <div class="grid2"><section class="card"><h2>${t === "exp" ? "Ausgaben" : "Einnahmen"} nach Kategorie</h2>${list}
+      ${idle.length ? `<p class="hint" style="margin-top:12px">Ohne Buchungen in ${y}: ${idle.map(r => esc(r.c.name)).join(", ")}</p>` : ""}</section>${detail}</div></div>`;
 }
 
 /* ---------- Investments ---------- */
@@ -1156,7 +1240,7 @@ function wealthSeries() {
 function wealthKpis(series, cur) {
   const at = m => { const p = series.find(x => x.m === m); return p ? p.v : null; };
   const now = at(cur) != null ? at(cur) : series[series.length - 1].v, y = +cur.slice(0, 4);
-  let ytdM = (y - 1) + "-12"; if (at(ytdM) == null) { const f = series.find(p => p.m.startsWith(y + "-") && p.m < cur); ytdM = f ? f.m : null; }
+  let ytdM = y + "-01"; if (at(ytdM) == null) { const f = series.find(p => p.m.startsWith(y + "-") && p.m <= cur); ytdM = f ? f.m : null; }
   const tile = (label, baseM, note) => {
     const base = baseM ? at(baseM) : null;
     if (base == null) return `<div class="kpi"><span class="eyebrow">${label}</span><b class="num">–</b><small>${note}</small></div>`;
@@ -1535,13 +1619,13 @@ function vImport() {
 
 /* ---------- Einstellungen ---------- */
 function vSettings() {
-  const catRows = type => S.settings.cats.filter(c => c.type === type).map(c => `<div class="lrow"><span class="dot" style="background:${safeColor(c.color)}"></span><span class="grow">${esc(c.name)}</span>
-    ${type === "exp" ? `<input class="input num" id="bud-${esc(c.id)}" data-budget="${esc(c.id)}" inputmode="decimal" placeholder="Budget €" value="${c.budget ? fmtIn(c.budget) : ""}" aria-label="Monatsbudget für ${esc(c.name)}">` : ""}
-    <button class="iconbtn" data-act="delCat" data-id="${esc(c.id)}" aria-label="${esc(c.name)} löschen">${ic("x")}</button></div>`).join("");
+  const catRows = type => `<div class="catlist" data-type="${type}">` + S.settings.cats.filter(c => c.type === type).map(c => `<div class="lrow catrow" data-id="${esc(c.id)}"><button type="button" class="drag" data-drag="${esc(c.id)}" aria-label="${esc(c.name)} verschieben, mit Pfeiltasten oder ziehen">${ic("grip")}</button><span class="dot" style="background:${safeColor(c.color)}"></span><span class="grow">${esc(c.name)}</span>
+    ${type === "exp" ? `<input class="input num" id="bud-${esc(c.id)}" data-budget="${esc(c.id)}" inputmode="decimal" placeholder="Budget" value="${c.budget ? fmtIn(c.budget) : ""}" aria-label="Monatsbudget für ${esc(c.name)}">` : ""}
+    <button class="iconbtn" data-act="delCat" data-id="${esc(c.id)}" aria-label="${esc(c.name)} löschen">${ic("x")}</button></div>`).join("") + `</div>`;
   const lockOpts = [1, 5, 15, 30].map(n => `<option value="${n}"${(S.settings.lockMin || 5) === n ? " selected" : ""}>nach ${n} ${n === 1 ? "Minute" : "Minuten"}</option>`).join("");
   return `<div class="stack">
-    <section class="card"><h2>Mehr</h2><div class="row"><button class="btn" data-act="go" data-view="rec">${ic("repeat")}Fixposten</button><button class="btn" data-act="go" data-view="import">${ic("upload")}Aus Tabelle importieren</button></div></section>
-    <section class="card"><h2>Ausgaben-Kategorien und Monatsbudgets</h2>${catRows("exp")}</section>
+    <section class="card"><h2>Mehr</h2><div class="row"><button class="btn" data-act="go" data-view="invest">${ic("chart")}Depot und Investments</button><button class="btn" data-act="go" data-view="rec">${ic("repeat")}Fixposten</button><button class="btn" data-act="go" data-view="import">${ic("upload")}Aus Tabelle importieren</button></div></section>
+    <section class="card"><h2>Ausgaben-Kategorien und Monatsbudgets</h2><p class="hint" style="margin-bottom:6px">Ziehe eine Kategorie am Griff links, um die Reihenfolge zu ändern. Am PC geht es auch mit Tab und den Pfeiltasten.</p>${catRows("exp")}</section>
     <section class="card"><h2>Einnahmen-Kategorien</h2>${catRows("inc")}</section>
     <section class="card"><h2>Kategorie hinzufügen</h2><form class="row" data-form="cat"><input class="input" id="cat-name" maxlength="30" placeholder="Name" required style="flex:1 1 180px;width:auto"><select class="input" id="cat-type" style="width:auto"><option value="exp">Ausgabe</option><option value="inc">Einnahme</option></select><button class="btn">Hinzufügen</button></form></section>
     <section class="card"><h2>Sicherheit</h2>
@@ -1621,6 +1705,10 @@ const A = {
     S.view = "tx"; renderView(); scrollTo(0, 0);
   },
   clearCat() { S.filter.cat = ""; renderView(); },
+  catYear(el) { S.catYear = (S.catYear || +curMonth().slice(0, 4)) + Number(el.dataset.dir); S.catSel = null; renderView(); },
+  catType(el) { S.catType = el.dataset.type; S.catSel = null; renderView(); },
+  catSort(el) { S.catSort = el.dataset.sort; renderView(); },
+  catSel(el) { S.catSel = el.dataset.id; renderView(); if (innerWidth <= 860) { const d = $("#catdetail"); if (d) d.scrollIntoView({ block: "start" }); scrollBy(0, -70); } },
   prevM() { S.month = addMonth(S.month, -1); renderView(); },
   nextM() { S.month = addMonth(S.month, 1); renderView(); },
   ftype(el) { S.filter.type = el.dataset.type; renderView(); },
@@ -1951,6 +2039,62 @@ document.addEventListener("change", async e => {
   else if (el.dataset.impmap) { I.map[el.dataset.impmap] = el.value === "" ? undefined : Number(el.value); if (el.value === "") delete I.map[el.dataset.impmap]; renderView(); }
   else if (el.dataset.impcol) { I.cols[el.dataset.impcol] = el.checked; renderView(); }
 });
+/* ---------- Kategorien sortieren: Ziehen am Griff (Maus und Finger) oder Pfeiltasten ---------- */
+let DR = null;
+function catOrderFromList(list) {
+  const type = list.dataset.type, ids = [...list.querySelectorAll(":scope > .catrow")].map(r => r.dataset.id);
+  const byId = new Map(S.settings.cats.map(c => [c.id, c])), queue = ids.map(id => byId.get(id)).filter(Boolean);
+  if (queue.length !== S.settings.cats.filter(c => c.type === type).length) return false;
+  S.settings.cats = S.settings.cats.map(c => c.type === type ? queue.shift() : c);
+  return true;
+}
+/* Verschiebt die gezogene Zeile unter den Finger und tauscht sie mit Nachbarn, sobald ihre Mitte deren Mitte überschreitet. */
+function dragUpdate() {
+  if (!DR) return;
+  const row = DR.row, list = DR.list;
+  if (!row.isConnected) { endDrag(false); return; }
+  for (let guard = 0; guard < 50; guard++) {
+    row.style.transform = `translateY(${DR.vy + scrollY - DR.startPageY}px)`;
+    const rows = [...list.querySelectorAll(":scope > .catrow")], i = rows.indexOf(row), rect = row.getBoundingClientRect(), mid = rect.top + rect.height / 2;
+    const prev = rows[i - 1], next = rows[i + 1];
+    const n = next && next.getBoundingClientRect(), p = prev && prev.getBoundingClientRect();
+    if (n && mid > n.top + n.height / 2) { list.insertBefore(next, row); DR.startPageY += n.height; DR.moved = true; }
+    else if (p && mid < p.top + p.height / 2) { list.insertBefore(row, prev); DR.startPageY -= p.height; DR.moved = true; }
+    else break;
+  }
+}
+/* Läuft nur, um am oberen oder unteren Bildschirmrand weiterzuscrollen, während der Finger dort stillhält. */
+function dragStep() {
+  if (!DR) return;
+  if (DR.vy < 70) { scrollBy(0, -10); dragUpdate(); } else if (DR.vy > innerHeight - 140) { scrollBy(0, 10); dragUpdate(); }
+  if (DR) DR.raf = requestAnimationFrame(dragStep);
+}
+async function endDrag(save) {
+  if (!DR) return;
+  const { row, list, moved } = DR; cancelAnimationFrame(DR.raf); DR = null;
+  document.body.classList.remove("is-dragging"); row.classList.remove("dragging"); row.style.transform = "";
+  if (save && moved && row.isConnected && catOrderFromList(list)) { await saveSettings(); toast("Reihenfolge gespeichert."); }
+}
+document.addEventListener("pointerdown", e => {
+  const h = e.target.closest("[data-drag]"); if (!h || e.button > 0) return;
+  const row = h.closest(".catrow"); if (!row) return;
+  e.preventDefault(); try { h.setPointerCapture(e.pointerId); } catch (err) {}
+  DR = { row, list: row.parentElement, startPageY: e.clientY + scrollY, vy: e.clientY, moved: false, pid: e.pointerId };
+  document.body.classList.add("is-dragging"); row.classList.add("dragging");
+  DR.raf = requestAnimationFrame(dragStep);
+});
+document.addEventListener("pointermove", e => { if (DR && e.pointerId === DR.pid) { DR.vy = e.clientY; e.preventDefault(); dragUpdate(); } }, { passive: false });
+document.addEventListener("pointerup", e => { if (DR && e.pointerId === DR.pid) endDrag(true); });
+document.addEventListener("pointercancel", e => { if (DR && e.pointerId === DR.pid) endDrag(true); });
+document.addEventListener("keydown", async e => {
+  const h = e.target.closest && e.target.closest("[data-drag]"); if (!h || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+  e.preventDefault();
+  const row = h.closest(".catrow"), list = row.parentElement, sib = e.key === "ArrowUp" ? row.previousElementSibling : row.nextElementSibling; if (!sib) return;
+  e.key === "ArrowUp" ? list.insertBefore(row, sib) : list.insertBefore(sib, row);
+  h.focus();
+  if (catOrderFromList(list)) { clearTimeout(endDrag.t); endDrag.t = setTimeout(async () => { await saveSettings(); toast("Reihenfolge gespeichert."); }, 500); }
+});
+
 async function importBackup(file) {
   try {
     const j = JSON.parse(await file.text());
