@@ -1212,10 +1212,11 @@ function finalSums(grid) {
   return out.exp == null && out.inc == null ? null : out;
 }
 const CAT_RULES = {
-  exp: [[/geschenk|geburtstag|\bgeb\b/i, "Geschenke"], [/\bfür [A-ZÄÖÜ]/, "Geschenke"], [/tank|park|\bbahn\b|\bbvg\b|\bdb\b|taxi|uber|flixbus|werkstatt|tüv|kfz|maut/i, "Mobilität"],
+  exp: [[/geschenk|geburtstag|\bgeb\b/i, "Geschenke"], [/\bfür [A-ZÄÖÜ]/, "Geschenke"], [/amazon/i, "Amazon"],
+    [/\btank(en|stelle|füllung)?\b|\baral\b|\bshell\b|\besso\b|\bjet\b|totalenergies|sprit|benzin|diesel/i, "Tanken"], [/park|\bbahn\b|\bbvg\b|\bdb\b|taxi|uber|flixbus|werkstatt|tüv|kfz|maut/i, "Mobilität"],
     [/steam|game|spiel|kino|konzert|badminton|unisport|fitness|sport|urlaub|reise|hotel|festival|museum/i, "Freizeit"], [/\bobi\b|baumarkt|ikea|waschmaschine|möbel|hornbach|toom|bauhaus|haushalt|staubsauger/i, "Haushalt"],
     [/friseur|kosmetik|drogerie|\bdm\b|rossmann|müller/i, "Körperpflege"], [/passbild|ausweis|reisepass|bürgeramt|\bamt\b|rundfunk|gebühr|strafzettel|bußgeld/i, "Gebühren & Ämter"],
-    [/amazon|zalando|ebay|\botto\b|temu|shein|aliexpress/i, "Shopping"], [/netflix|spotify|claude|chatgpt|disney|\babo\b|vodafone|telekom|\bo2\b|handyvertrag|icloud|youtube/i, "Abos & Verträge"],
+    [/zalando|ebay|\botto\b|temu|shein|aliexpress/i, "Shopping"], [/netflix|spotify|claude|chatgpt|disney|\babo\b|vodafone|telekom|\bo2\b|handyvertrag|icloud|youtube/i, "Abos & Verträge"],
     [/apotheke|arzt|zahn|brille|physio|kontaktlinse/i, "Gesundheit"], [/kleidung|schuhe|h&m|zara|jacke|hose|primark/i, "Kleidung"],
     [/rewe|edeka|aldi|lidl|netto|penny|kaufland/i, "Lebensmittel"], [/miete|strom|nebenkosten|internet|gas\b/i, "Wohnen"], [/versicherung|haftpflicht|hausrat/i, "Versicherungen"]],
   inc: [[/zinsen|dividende|gewinn|trade|ausschüttung|rendite/i, "Kapitalerträge"], [/kleinanzeigen|verkauf|vinted|ebay|rebuy|momox/i, "Verkäufe"],
@@ -1275,11 +1276,12 @@ function buildBlocks(only) {
       const map = I.bmap[b.type + "|" + b.name]; if (!map || !map.cat) continue;
       let last = null;
       for (const r of b.rows) {
-        let t = b.type; const flip = t === "exp" ? r.a > 0 : r.a < 0; if (flip) t = t === "exp" ? "inc" : "exp";
+        /* Der Block entscheidet: unter Ausgaben ist alles Ausgabe, unter Einkommen alles Einnahme. Ein abweichendes Vorzeichen gilt als Tippfehler. */
+        const t = b.type, wrong = t === "exp" ? r.a > 0 : r.a < 0;
         const real = blockDate(r.d, s.ym); if (real) last = real;
-        const n = r.n.slice(0, 80), fallback = t === b.type ? map.cat : (t === "inc" ? "Erstattungen" : "Sonstiges");
-        items.push({ d: real || last || s.ym + "-01", t, a: Math.round(Math.abs(r.a) * 100), n, flip, ym: s.ym, block: b.type + "|" + b.name,
-          split: map.split && !!n, fix: map.fix && !flip, cat: map.split && n ? rowCat(t, n, fallback) : fallback });
+        const n = r.n.slice(0, 80);
+        items.push({ d: real || last || s.ym + "-01", t, a: Math.round(Math.abs(r.a) * 100), n, wrong, ym: s.ym, block: b.type + "|" + b.name,
+          split: map.split && !!n, fix: map.fix, cat: map.split && n ? rowCat(t, n, map.cat) : map.cat });
       }
     }
   }
@@ -1294,13 +1296,19 @@ function vImportBlocks(pick) {
   const all = buildBlocks(), keys = Object.keys(I.bmap);
   const sheetRows = I.bsheets.map((s, i) => {
     const it = buildBlocks(s), sum = t => it.filter(x => x.t === t).reduce((a, x) => a + x.a, 0), exp = sum("exp"), inc = sum("inc");
-    const flipped = it.filter(x => x.flip).reduce((a, x) => a + x.a, 0), ck = s.check;
+    const ck = s.check, wr = it.filter(x => x.wrong), wSum = t => wr.filter(x => x.t === t).reduce((a, x) => a + x.a, 0), wE = wSum("exp"), wI = wSum("inc");
     let check = "";
     if (ck && s.on) {
-      const okE = ck.exp == null || Math.abs(Math.round(Math.abs(ck.exp) * 100) - (exp - flipped)) <= 1, okI = ck.inc == null || Math.abs(Math.round(Math.abs(ck.inc) * 100) - (inc - flipped)) <= 1;
-      check = `<p class="hint" style="flex-basis:100%">${okE && okI ? '<span class="pill ok">Stimmt mit deiner Tabelle</span>' : '<span class="pill bad">Weicht von deiner Tabelle ab</span>'}
-        Tabelle: Ausgaben ${ck.exp != null ? fmt(Math.round(Math.abs(ck.exp) * 100)) : "–"}, Einnahmen ${ck.inc != null ? fmt(Math.round(Math.abs(ck.inc) * 100)) : "–"}${ck.diff != null ? ", Differenz " + fmt(Math.round(ck.diff * 100)) : ""}.
-        ${flipped ? `Davon ${fmt(flipped)} mit umgekehrtem Vorzeichen, die die App als Erstattung bucht statt sie mit den Ausgaben zu verrechnen.` : ""}${okE && okI ? "" : " Prüfe, ob alle Blöcke einer Kategorie zugeordnet sind."}</p>`;
+      /* Die Tabelle hat Posten mit falschem Vorzeichen abgezogen statt addiert: ihr Wert liegt um das Doppelte dieser Posten daneben. */
+      const cE = ck.exp == null ? null : Math.round(Math.abs(ck.exp) * 100), cI = ck.inc == null ? null : Math.round(Math.abs(ck.inc) * 100);
+      const exactE = cE == null || Math.abs(cE - exp) <= 1, exactI = cI == null || Math.abs(cI - inc) <= 1;
+      const signE = !exactE && Math.abs(cE - (exp - 2 * wE)) <= 1, signI = !exactI && Math.abs(cI - (inc - 2 * wI)) <= 1;
+      const line = (label, mine, theirs, exact, sign, w) => `<span class="pill ${exact ? "ok" : sign ? "" : "bad"}">${label} ${exact ? "stimmt" : sign ? "Vorzeichen korrigiert" : "weicht ab"}</span>
+        <span>App ${fmt(mine)}${theirs == null ? "" : `, Tabelle ${fmt(theirs)}`}${sign ? `. Die Tabelle zieht ${fmt(w)} ab, die als ${label === "Ausgaben" ? "Ausgabe" : "Einnahme"} zählen; dadurch fehlen ihr ${fmt(2 * w)}.` : "."}</span>`;
+      check = `<div class="hint" style="flex-basis:100%;display:grid;gap:6px">
+        <div class="row" style="gap:8px">${line("Ausgaben", exp, cE, exactE, signE, wE)}</div>
+        <div class="row" style="gap:8px">${line("Einnahmen", inc, cI, exactI, signI, wI)}</div>
+        ${exactE && exactI || signE || signI ? "" : "<span>Prüfe, ob alle Blöcke einer Kategorie zugeordnet sind.</span>"}</div>`;
     }
     return `<div class="lrow"><label class="check grow"><input type="checkbox" id="imp-s-${i}" data-impsheet="${i}"${s.on ? " checked" : ""}>${esc(s.name)}</label>
       <input class="input" id="imp-ym-${i}" data-impym="${i}" type="month" value="${esc(s.ym)}" aria-label="Monat für ${esc(s.name)}" style="width:170px;text-align:left">
@@ -1313,7 +1321,7 @@ function vImportBlocks(pick) {
         ${t === "exp" ? `<label class="check"><input type="checkbox" id="imp-fx-${i}" data-impfix="${esc(k)}"${m.fix ? " checked" : ""}>Als monatliche Fixposten übernehmen</label>` : ""}</div>` : ""}</div>`; }).join(""); }).join("");
   const splitItems = all.filter(x => x.split), seenKeys = new Set();
   const splitRows = splitItems.filter(x => { const k = rowKey(x.t, x.n); if (seenKeys.has(k)) return false; seenKeys.add(k); return true; })
-    .map((x, i) => `<div class="lrow"><span class="grow">${esc(x.n)}<br><small class="muted">${shortDate(x.d)} · ${I.bmap[x.block].name}${x.flip ? " · Erstattung" : ""}</small></span><span class="num ${x.t}">${x.t === "inc" ? "+" : "−"}${fmt(x.a)}</span>
+    .map((x, i) => `<div class="lrow"><span class="grow">${esc(x.n)}<br><small class="muted">${shortDate(x.d)} · ${I.bmap[x.block].name}${x.wrong ? " · Vorzeichen korrigiert" : ""}</small></span><span class="num ${x.t}">${x.t === "inc" ? "+" : "−"}${fmt(x.a)}</span>
       <select class="input" id="imp-r-${i}" data-improw="${esc(rowKey(x.t, x.n))}" aria-label="Kategorie für ${esc(x.n)}" style="width:auto;max-width:200px;text-align:left">${catOptionsFor(x.t, x.cat, [x.cat])}</select></div>`).join("");
   const fixItems = all.filter(x => x.fix), latest = fixItems.reduce((m, x) => x.ym > m ? x.ym : m, "");
   const newFix = fixItems.filter(x => x.ym === latest && !S.settings.rec.some(r => r.name.toLowerCase() === (x.n || "Festkosten").toLowerCase()));
