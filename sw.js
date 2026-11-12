@@ -1,5 +1,5 @@
 /* Finance Track: macht die App offline nutzbar. Online wird immer die neueste Version geladen. */
-const CACHE = "finance-track-202611122304";
+const CACHE = "finance-track-202611122319";
 const CORE = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(CORE)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
